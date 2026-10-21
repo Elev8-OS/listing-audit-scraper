@@ -41,7 +41,7 @@ function parseListingUrl(raw) {
   return { id: m[1], host, url: `https://www.${host}/rooms/${m[1]}` };
 }
 
-// Pro sectionId ALLE Wrapper behalten (Section-Container ODER sbui-"sectionData").
+// Pro sectionId ALLE Wrapper behalten
 function collectSections(root) {
   const out = {};
   const seen = new WeakSet();
@@ -60,7 +60,6 @@ function mergeSections(target, src) {
   for (const [id, arr] of Object.entries(src)) target[id] = (target[id] || []).concat(arr);
 }
 
-// Tolerante Suche: alle Objekte im Baum, die pred erfüllen
 function deepFind(root, pred, limit = 1000) {
   const out = [];
   const seen = new WeakSet();
@@ -79,24 +78,40 @@ const firstKey = (root, key) => {
 const strings = (root, key) => deepFind(root, (o) => typeof o[key] === 'string').map((o) => o[key]);
 const uniq = (arr) => [...new Set(arr)];
 
-// Debug: Pfade zu Keys finden, die zu re passen
-function findPaths(root, re, max = 60) {
-  const out = [];
-  const seen = new WeakSet();
-  (function walk(n, path) {
-    if (out.length >= max || !n || typeof n !== 'object' || seen.has(n)) return;
-    seen.add(n);
-    for (const k in n) {
-      const p = Array.isArray(n) ? `${path}[${k}]` : `${path}.${k}`;
-      if (!Array.isArray(n) && re.test(k)) {
-        const v = n[k];
-        const t = Array.isArray(v) ? `array(${v.length})` : v === null ? 'null' : typeof v;
-        out.push(`${p} : ${t}`);
-      }
-      walk(n[k], p);
+// Airbnb-Rauschen entfernen (Logging, Typnamen, Nulls)
+const NOISE = new Set(['__typename', 'loggingData', 'loggingEventData', 'e2eLoggingSession', 'experiments', 'eventData', 'eventDataSchema', 'eventDataSchemaName']);
+function prune(v) {
+  if (Array.isArray(v)) return v.map(prune).filter((x) => x !== undefined);
+  if (v && typeof v === 'object') {
+    const o = {};
+    for (const [k, x] of Object.entries(v)) {
+      if (NOISE.has(k) || x == null) continue;
+      const p = prune(x);
+      if (p === undefined || (Array.isArray(p) && !p.length) || (p && typeof p === 'object' && !Array.isArray(p) && !Object.keys(p).length)) continue;
+      o[k] = p;
     }
-  })(root, '$');
-  return out;
+    return o;
+  }
+  return v;
+}
+function capJson(v, max = 9000) {
+  const p = prune(v);
+  const s = JSON.stringify(p);
+  if (s === undefined) return null;
+  return s.length > max ? `${s.slice(0, max)}…[gekürzt, ${s.length} Zeichen]` : p;
+}
+
+// Die eigentlichen Listing-Daten liegen unter data.node.pdpPresentation (mehrere Kopien → größte je Key)
+function mergePdp(roots) {
+  const merged = {};
+  for (const o of deepFind(roots, (x) => x.pdpPresentation && typeof x.pdpPresentation === 'object')) {
+    for (const [k, v] of Object.entries(o.pdpPresentation)) {
+      if (v == null) continue;
+      const len = JSON.stringify(v).length;
+      if (!merged[k] || len > merged[k].len) merged[k] = { v, len };
+    }
+  }
+  return Object.fromEntries(Object.entries(merged).map(([k, x]) => [k, x.v]));
 }
 
 function stripQuery(u) { return (u || '').split('?')[0]; }
@@ -105,7 +120,7 @@ function isListingPhoto(src) {
     !/AirbnbPlatformAssets|airbnb-platform-assets|\/user\//.test(src);
 }
 
-function normalize(sections) {
+function normalize(sections, pdp) {
   const sec = (re) => Object.keys(sections).filter((k) => re.test(k)).map((k) => sections[k]);
 
   const title = firstKey(sec(/^TITLE/), 'title');
@@ -116,22 +131,18 @@ function normalize(sections) {
   ).map((o) => o.htmlText);
   const description = uniq(descParts).join('\n\n---\n\n') || null;
 
+  // Amenities: seeAllAmenitiesGroups (alle) bevorzugt, sonst preview
+  const groupsSrc = pdp.amenities?.seeAllAmenitiesGroups?.length ? pdp.amenities.seeAllAmenitiesGroups : (pdp.amenities ?? {});
   const seenAm = new Set();
-  let amenities = deepFind(sec(/^AMENITIES/), (o) => Array.isArray(o.amenities)).flatMap((g) =>
+  const amenities = deepFind(groupsSrc, (o) => Array.isArray(o.amenities)).flatMap((g) =>
     g.amenities.map((a) => ({
       group: g.title ?? null,
       name: a.title ?? null,
       available: a.available !== false,
       note: a.subtitle || null,
     })),
-  );
-  if (!amenities.length) {
-    amenities = deepFind(sec(/^AMENITIES/), (o) => typeof o.title === 'string' && 'available' in o).map((a) => ({
-      group: null, name: a.title, available: a.available !== false, note: a.subtitle || null,
-    }));
-  }
-  amenities = amenities.filter((a) => {
-    const k = `${a.name}|${a.available}`;
+  ).filter((a) => {
+    const k = `${a.group}|${a.name}`;
     return seenAm.has(k) ? false : seenAm.add(k);
   });
 
@@ -142,37 +153,36 @@ function normalize(sections) {
     .map((p, i) => ({ position: i + 1, ...p }));
 
   const seenSl = new Set();
-  const sleeping = deepFind(sec(/^SLEEPING/), (o) => typeof o.title === 'string' && typeof o.subtitle === 'string')
+  const sleeping = deepFind(pdp.sleepingArrangements ?? {}, (o) => typeof o.title === 'string' && typeof o.subtitle === 'string')
     .map((a) => ({ room: a.title, beds: a.subtitle }))
     .filter((a) => { const k = `${a.room}|${a.beds}`; return seenSl.has(k) ? false : seenSl.add(k); });
 
-  const rv = sec(/^REVIEWS/);
-  const ratings = rv.length
-    ? {
-        overall: firstKey(rv, 'overallRating') ?? firstKey(rv, 'localizedOverallRating') ?? firstKey(rv, 'ratingAverage'),
-        count: firstKey(rv, 'overallCount') ?? firstKey(rv, 'reviewsCount') ?? firstKey(rv, 'reviewCount'),
-        categories: uniq(
-          deepFind(rv, (o) => 'categoryType' in o).map((r) =>
-            JSON.stringify({ category: r.categoryType, label: r.label ?? null, value: r.localizedRating ?? r.value ?? null })),
-        ).map((s) => JSON.parse(s)),
-        distribution: firstKey(rv, 'ratingDistribution') ?? null,
-      }
-    : null;
+  const highlights = (Array.isArray(pdp.highlights) ? pdp.highlights : [])
+    .map((h) => ({ title: h.title ?? null, subtitle: h.subtitle ?? h.message ?? null }));
+
+  const q = pdp.quality ?? {};
+  const ratings = {
+    overall: capJson(q.listingRatingStats?.overallRatingStats ?? pdp.listingRatingStats?.overallRatingStats ?? null, 2000),
+    categories: (q.categoryRatings ?? []).map((c) => ({ category: c.categoryType ?? null, value: c.localizedRating ?? null })),
+    distribution: capJson(q.ratingDistribution ?? null, 3000),
+  };
 
   return {
     title,
     description,
-    highlights: deepFind(sec(/^HIGHLIGHTS/), (o) => typeof o.title === 'string' && 'subtitle' in o)
-      .map((h) => ({ title: h.title, subtitle: h.subtitle })),
+    highlights,
     sleeping,
     amenities,
     photos,
     ratings,
-    houseRules: uniq(
-      deepFind(sec(/^POLICIES/), (o) => typeof o.title === 'string')
-        .map((o) => JSON.stringify({ title: o.title, text: o.subtitle ?? null })),
-    ).map((s) => JSON.parse(s)),
     locationTexts: uniq(strings(sec(/^LOCATION/), 'htmlText')),
+    pdp: {
+      keys: Object.keys(pdp),
+      sleepingArrangements: capJson(pdp.sleepingArrangements),
+      hostInfo: capJson(pdp.hostInfo),
+      location: capJson(pdp.location),
+      quality: capJson(pdp.quality),
+    },
   };
 }
 
@@ -195,13 +205,6 @@ function extractReviews(roots) {
     }
   }
   return [...map.values()].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-}
-
-function logChunks(label, value, max = 12000) {
-  let s = typeof value === 'string' ? value : JSON.stringify(value);
-  if (!s) return;
-  if (s.length > max) s = `${s.slice(0, max)}…[+${s.length - max} Zeichen]`;
-  for (let i = 0; i * 3500 < s.length; i++) console.log(`[DBG ${label} #${i}] ${s.slice(i * 3500, (i + 1) * 3500)}`);
 }
 
 /* ---------- DOM-Interaktion ---------- */
@@ -279,7 +282,7 @@ async function scrape(target, opts) {
       if (!/StaysPdp/i.test(op)) return;
       if (!(res.headers()['content-type'] || '').includes('json')) return;
       const json = await res.json();
-      apiRoots.push({ op, json });
+      apiRoots.push(json);
       if (/Reviews/i.test(op)) reviewRoots.push(json);
       mergeSections(apiSections, collectSections(json));
     } catch {}
@@ -291,15 +294,14 @@ async function scrape(target, opts) {
     await dismiss(page);
     await page.waitForTimeout(2000);
 
-    // Lazy-Sections laden
     for (let i = 0; i < 10; i++) { await page.mouse.wheel(0, 1400); await page.waitForTimeout(350); }
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.waitForTimeout(500);
 
-    // 0) Sichtbarer Seitentext (verlässlichster Fallback; wird später vom LLM ausgewertet)
+    // Sichtbarer Seitentext (Fallback + Kontext)
     const pageText = await page.evaluate(() => (document.querySelector('main') || document.body).innerText).catch(() => null);
 
-    // 1) Eingebetteter State + API-Antworten
+    // Eingebetteter State + API-Antworten
     const states = await page.evaluate(() =>
       [...document.querySelectorAll('script[id^="data-deferred-state"]')].map((s) => s.textContent),
     );
@@ -309,13 +311,14 @@ async function scrape(target, opts) {
       try { const j = JSON.parse(t); stateRoots.push(j); mergeSections(sections, collectSections(j)); } catch {}
     }
     mergeSections(sections, apiSections);
-    const data = normalize(sections);
+    const pdp = mergePdp([...stateRoots, ...apiRoots]);
+    const data = normalize(sections, pdp);
 
     const pageTitle = await page.title().catch(() => null);
     const h1 = await page.locator('h1').first().textContent().catch(() => null);
     data.title = data.title || h1;
 
-    // 2) Dialoge: Amenities (falls State leer), Fotos (falls wenige)
+    // Dialog-Fallbacks
     const dialogs = {};
     if (!data.amenities.length) {
       if (await openDialogBy(page, /Alle\s+\d+\s+Ausstattung|Show all\s+\d+\s+amenities/i, 'Amenities', errors)) {
@@ -336,7 +339,7 @@ async function scrape(target, opts) {
       }
     }
 
-    // 3) Reviews im Volltext
+    // Reviews im Volltext
     let domReviews = [];
     if (opts.reviews) {
       if (await openDialogBy(page, /Alle\s+\d+\s+\S*[Bb]ewertungen|Show all\s+\d+\s+reviews/i, 'Reviews', errors)) {
@@ -348,7 +351,6 @@ async function scrape(target, opts) {
           const lines = r.text.split('\n').map((s) => s.trim()).filter(Boolean);
           return { id: r.id, reviewer: lines[0] ?? null, meta: lines[1] ?? null, text: lines.slice(2).join('\n') };
         });
-        // Kopf des Review-Dialogs (Gesamtnote, Kategorien, "Gäste erwähnen")
         dialogs.reviewsHeader = ((await dialogText(page)) || '').slice(0, 3000);
         await closeDialog(page);
       }
@@ -356,13 +358,9 @@ async function scrape(target, opts) {
     const apiReviews = extractReviews([...reviewRoots, ...Object.values(sections)]);
     const reviews = apiReviews.length >= domReviews.length ? apiReviews : domReviews;
 
-    // Debug: ins Railway-Log (nur mit &debug=1)
     if (opts.debug) {
-      const re = /amenit|sleeping|arrangement|highlight|ratingDistribution|overallRating|categoryType|localizedRating|seeAll|sbui|sectionData/i;
-      stateRoots.forEach((r, i) => findPaths(r, re).forEach((p) => console.log(`[DBG PATH state${i}] ${p}`)));
-      apiRoots.forEach(({ op, json }) => findPaths(json, re, 25).forEach((p) => console.log(`[DBG PATH api:${op}] ${p}`)));
-      console.log(`[DBG SUMMARY] amenities=${data.amenities.length} sleeping=${data.sleeping.length} photos=${data.photos.length} highlights=${data.highlights.length} reviews=${reviews.length} descLen=${(data.description || '').length} pageTextLen=${(pageText || '').length} errors=${JSON.stringify(errors)}`);
-      console.log(`[DBG sectionIds] ${Object.keys(sections).join(',')}`);
+      console.log(`[DBG SUMMARY] amenities=${data.amenities.length} sleeping=${data.sleeping.length} photos=${data.photos.length} highlights=${data.highlights.length} reviews=${reviews.length} cats=${data.ratings.categories.length} descLen=${(data.description || '').length} pdpKeys=${data.pdp.keys.join(',')} errors=${JSON.stringify(errors)}`);
+      console.log(`[DBG SLEEPING] ${JSON.stringify(data.pdp.sleepingArrangements).slice(0, 3400)}`);
     }
 
     return {
@@ -377,12 +375,10 @@ async function scrape(target, opts) {
       dialogs,
       pageText: pageText ? pageText.slice(0, 40000) : null,
       debug: {
-        sectionIds: Object.keys(sections),
         apiOps: [...apiOps],
         reviewSources: { api: apiReviews.length, dom: domReviews.length },
         errors,
       },
-      ...(opts.raw ? { raw: sections } : {}),
     };
   } finally {
     await ctx.close().catch(() => {});
@@ -415,7 +411,6 @@ const server = http.createServer(async (req, res) => {
       const target = parseListingUrl(u.searchParams.get('url') || '');
       const opts = {
         reviews: u.searchParams.get('reviews') !== '0',
-        raw: u.searchParams.get('raw') === '1',
         debug: u.searchParams.get('debug') === '1',
         locale: u.searchParams.get('locale') || 'de-DE',
       };
