@@ -41,7 +41,9 @@ function parseListingUrl(raw) {
   return { id: m[1], host, url: `https://www.${host}/rooms/${m[1]}` };
 }
 
-// Airbnb liefert die Seite als verschachteltes JSON mit "sections". Wir sammeln alle.
+// Airbnb liefert die Seite als verschachteltes JSON mit "sections".
+// Wir behalten pro sectionId ALLE Wrapper (Section + Geschwister-Felder), weil der Inhalt
+// je nach Seite im "section"-Objekt oder daneben liegen kann und manche Kopien nur Stubs sind.
 function collectSections(root) {
   const out = {};
   const seen = new WeakSet();
@@ -49,12 +51,15 @@ function collectSections(root) {
     if (!n || typeof n !== 'object' || seen.has(n)) return;
     seen.add(n);
     if (Array.isArray(n)) { n.forEach(walk); return; }
-    if (typeof n.sectionId === 'string' && n.section && typeof n.section === 'object') {
-      if (!out[n.sectionId]) out[n.sectionId] = n.section;
+    if (typeof n.sectionId === 'string' && 'section' in n) {
+      (out[n.sectionId] ||= []).push(n);
     }
     for (const k in n) walk(n[k]);
   })(root);
   return out;
+}
+function mergeSections(target, src) {
+  for (const [id, arr] of Object.entries(src)) target[id] = (target[id] || []).concat(arr);
 }
 
 // Tolerante Suche: alle Objekte im Baum, die pred erfüllen
@@ -84,7 +89,7 @@ function isListingPhoto(src) {
 
 function normalize(sections) {
   const sec = (re) => Object.keys(sections).filter((k) => re.test(k)).map((k) => sections[k]);
-  const first = (re) => sec(re)[0] ?? null;
+  const first = (re) => sec(re);
 
   const title = firstKey(first(/^TITLE/), 'title');
 
@@ -109,7 +114,7 @@ function normalize(sections) {
     }));
   }
   amenities = amenities.filter((a) => {
-    const k = `${a.group}|${a.name}`;
+    const k = `${a.name}|${a.available}`;
     return seenAm.has(k) ? false : seenAm.add(k);
   });
 
@@ -119,20 +124,22 @@ function normalize(sections) {
     .filter((p) => (seenPh.has(p.url) ? false : seenPh.add(p.url)))
     .map((p, i) => ({ position: i + 1, ...p }));
 
+  const seenSl = new Set();
   const sleeping = deepFind(sec(/^SLEEPING/), (o) => typeof o.title === 'string' && typeof o.subtitle === 'string')
-    .map((a) => ({ room: a.title, beds: a.subtitle }));
+    .map((a) => ({ room: a.title, beds: a.subtitle }))
+    .filter((a) => { const k = `${a.room}|${a.beds}`; return seenSl.has(k) ? false : seenSl.add(k); });
 
   const rv = sec(/^REVIEWS/);
   const ratings = rv.length
     ? {
         overall: firstKey(rv, 'overallRating') ?? firstKey(rv, 'localizedOverallRating') ?? firstKey(rv, 'ratingAverage'),
         count: firstKey(rv, 'overallCount') ?? firstKey(rv, 'reviewsCount') ?? firstKey(rv, 'reviewCount'),
-        categories: deepFind(rv, (o) => 'categoryType' in o).map((r) => ({
-          category: r.categoryType,
-          label: r.label ?? null,
-          value: r.localizedRating ?? r.value ?? null,
-        })),
+        categories: uniq(
+          deepFind(rv, (o) => 'categoryType' in o).map((r) =>
+            JSON.stringify({ category: r.categoryType, label: r.label ?? null, value: r.localizedRating ?? r.value ?? null })),
+        ).map((s) => JSON.parse(s)),
         distribution: firstKey(rv, 'ratingDistribution') ?? null,
+        topics: uniq(strings(rv, 'localizedTitle').concat(strings(rv, 'tagName'))),
       }
     : null;
 
@@ -148,8 +155,10 @@ function normalize(sections) {
     ratings,
     guestFavoriteBanner: uniq(strings(sec(/^GUEST_FAVORITE/), 'title')),
     hostTexts: uniq(strings(sec(/^(MEET_YOUR_HOST|HOST_OVERVIEW)/), 'title')),
-    houseRules: deepFind(sec(/^POLICIES/), (o) => typeof o.title === 'string')
-      .map((o) => ({ title: o.title, text: o.subtitle ?? null })),
+    houseRules: uniq(
+      deepFind(sec(/^POLICIES/), (o) => typeof o.title === 'string')
+        .map((o) => JSON.stringify({ title: o.title, text: o.subtitle ?? null })),
+    ).map((s) => JSON.parse(s)),
     location: firstKey(sec(/^LOCATION/), 'subtitle'),
     locationTexts: uniq(strings(sec(/^LOCATION/), 'htmlText')),
   };
@@ -157,22 +166,24 @@ function normalize(sections) {
 
 function extractReviews(roots) {
   const map = new Map();
-  for (const o of deepFind(roots, (x) => typeof x.comments === 'string' && x.id != null, 3000)) {
+  for (const o of deepFind(roots, (x) => typeof x.comments === 'string' && x.id != null && 'reviewer' in x, 5000)) {
     const id = String(o.id);
     if (!map.has(id)) {
       map.set(id, {
         id,
         rating: o.rating ?? null,
-        date: o.localizedDate ?? o.createdAt ?? null,
+        date: o.localizedDate ?? null,
+        createdAt: o.createdAt ?? null,
         language: o.language ?? null,
         reviewer: o.reviewer?.firstName ?? null,
+        reviewerLocation: o.localizedReviewerLocation ?? null,
         text: o.comments,
-        textTranslated: o.localizedReview?.comments ?? null,
         hostResponse: o.response ?? null,
+        needsTranslation: o.localizedReview?.needsTranslation ?? null,
       });
     }
   }
-  return [...map.values()];
+  return [...map.values()].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 }
 
 function logChunks(label, value, max = 12000) {
@@ -256,7 +267,7 @@ async function scrape(target, opts) {
       if (!(res.headers()['content-type'] || '').includes('json')) return;
       const json = await res.json();
       if (/Reviews/i.test(op)) reviewRoots.push(json);
-      Object.assign(apiSections, collectSections(json));
+      mergeSections(apiSections, collectSections(json));
     } catch {}
   });
 
@@ -270,13 +281,13 @@ async function scrape(target, opts) {
     for (let i = 0; i < 8; i++) { await page.mouse.wheel(0, 1400); await page.waitForTimeout(350); }
     await page.evaluate(() => window.scrollTo(0, 0));
 
-    // 1) Eingebetteter State
+    // 1) Eingebetteter State + API-Antworten (alle Kopien behalten)
     const states = await page.evaluate(() =>
       [...document.querySelectorAll('script[id^="data-deferred-state"]')].map((s) => s.textContent),
     );
     const sections = {};
-    for (const t of states) { try { Object.assign(sections, collectSections(JSON.parse(t))); } catch {} }
-    Object.assign(sections, apiSections);
+    for (const t of states) { try { mergeSections(sections, collectSections(JSON.parse(t))); } catch {} }
+    mergeSections(sections, apiSections);
     const data = normalize(sections);
 
     const pageTitle = await page.title().catch(() => null);
@@ -303,12 +314,6 @@ async function scrape(target, opts) {
         await closeDialog(page);
       }
     }
-    if (!data.description) {
-      if (await openDialogBy(page, /Mehr anzeigen|Show more/i, 'Beschreibung', errors)) {
-        dialogs.descriptionText = await page.$eval('[role="dialog"]', (e) => e.innerText).catch(() => null);
-        await closeDialog(page);
-      }
-    }
 
     // 3) Reviews im Volltext (Dialog öffnen + scrollen → Airbnb lädt weitere Seiten per API)
     let domReviews = [];
@@ -325,14 +330,19 @@ async function scrape(target, opts) {
         await closeDialog(page);
       }
     }
-    const apiReviews = extractReviews([...reviewRoots, ...Object.values(sections).filter((s) => s && s.reviews)]);
+    const apiReviews = extractReviews([...reviewRoots, ...Object.values(sections)]);
     const reviews = apiReviews.length >= domReviews.length ? apiReviews : domReviews;
 
     // Debug: Roh-Struktur ins Railway-Log (nur mit &debug=1)
     if (opts.debug) {
-      const want = /^(TITLE|DESCRIPTION|AMENITIES|SLEEPING|REVIEWS|HIGHLIGHTS|OVERVIEW|GUEST_FAVORITE|HOST_OVERVIEW|POLICIES|LOCATION|UGC_TRANSLATION)/;
-      for (const [id, s] of Object.entries(sections)) if (want.test(id)) logChunks(id, s);
-      reviewRoots.slice(0, 2).forEach((r, i) => logChunks(`REVIEWS_API_${i}`, r, 8000));
+      const want = /^(TITLE|AMENITIES|SLEEPING|REVIEWS|HIGHLIGHTS|OVERVIEW|GUEST_FAVORITE|HOST_OVERVIEW|POLICIES|LOCATION)/;
+      for (const [id, arr] of Object.entries(sections)) {
+        console.log(`[DBG KEYS ${id}] copies=${arr.length} wrapperKeys=${JSON.stringify(arr.map((w) => Object.keys(w)))} sizes=${JSON.stringify(arr.map((w) => JSON.stringify(w).length))}`);
+        if (want.test(id)) {
+          const biggest = [...arr].sort((a, b) => JSON.stringify(b).length - JSON.stringify(a).length)[0];
+          logChunks(id, biggest, 9000);
+        }
+      }
       console.log(`[DBG] reviews api=${apiReviews.length} dom=${domReviews.length} errors=${JSON.stringify(errors)}`);
     }
 
