@@ -1,15 +1,46 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { chromium } from 'playwright';
 
 const PORT = Number(process.env.PORT || 3000);
 const API_KEY = process.env.API_KEY || '';
 const NAV_TIMEOUT = 45000;
 const TOTAL_TIMEOUT = 150000;
+const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MIN || 360) * 60000; // Standard: 6 Stunden
+const DATA_DIR = process.env.DATA_DIR || '/tmp/listing-audit-cache'; // mit Railway-Volume dauerhaft
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
+
+/* ---------- Cache (Speicher + Datei) ---------- */
+const cache = new Map();
+const lastError = new Map();
+const inflight = new Map();
+try {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  for (const f of fs.readdirSync(DATA_DIR)) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(DATA_DIR, f), 'utf8'));
+      if (j.listingId) cache.set(j.listingId, j);
+    } catch {}
+  }
+} catch (e) { console.log('Cache-Verzeichnis nicht nutzbar:', e.message); }
+function cacheSet(data) {
+  cache.set(data.listingId, data);
+  fs.writeFile(path.join(DATA_DIR, `${data.listingId}.json`), JSON.stringify(data), () => {});
+}
+const ageSec = (d) => Math.round((Date.now() - Date.parse(d.fetchedAt)) / 1000);
+const isFresh = (d) => Boolean(d) && Date.now() - Date.parse(d.fetchedAt) < CACHE_TTL_MS;
+// slim=1: ohne Seitentext und Roh-Teile (klein genug für schnelle Abrufe)
+function view(d, slim) {
+  if (!slim) return d;
+  const { pageText, pdp, ...rest } = d;
+  return rest;
+}
 
 /* ---------- Browser & Queue (immer nur ein Scrape gleichzeitig) ---------- */
 let browser = null;
@@ -29,6 +60,18 @@ function enqueue(fn) {
 }
 const withTimeout = (p, ms) =>
   Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(httpError(504, 'Timeout')), ms))]);
+
+// Ein Scrape pro Listing gleichzeitig; Ergebnis wird gecacht
+function startScrape(target, opts) {
+  if (inflight.has(target.id)) return inflight.get(target.id);
+  const p = enqueue(() => withTimeout(scrape(target, opts), TOTAL_TIMEOUT))
+    .then((d) => { lastError.delete(target.id); cacheSet(d); return d; })
+    .catch((e) => { lastError.set(target.id, { message: e.message, at: new Date().toISOString() }); throw e; })
+    .finally(() => inflight.delete(target.id));
+  p.catch(() => {});
+  inflight.set(target.id, p);
+  return p;
+}
 
 /* ---------- Helfer ---------- */
 function parseListingUrl(raw) {
@@ -139,7 +182,7 @@ function normalize(sections, pdp) {
       group: g.title ?? null,
       name: a.title ?? null,
       available: a.available !== false,
-      note: a.subtitle || null,
+      note: (typeof a.subtitle === 'string' ? a.subtitle : a.subtitle?.text) || null,
     })),
   ).filter((a) => {
     const k = `${a.group}|${a.name}`;
@@ -152,35 +195,46 @@ function normalize(sections, pdp) {
     .filter((p) => (seenPh.has(p.url) ? false : seenPh.add(p.url)))
     .map((p, i) => ({ position: i + 1, ...p }));
 
-  const seenSl = new Set();
-  const sleeping = deepFind(pdp.sleepingArrangements ?? {}, (o) => typeof o.title === 'string' && typeof o.subtitle === 'string')
-    .map((a) => ({ room: a.title, beds: a.subtitle }))
-    .filter((a) => { const k = `${a.room}|${a.beds}`; return seenSl.has(k) ? false : seenSl.add(k); });
-
-  const highlights = (Array.isArray(pdp.highlights) ? pdp.highlights : [])
-    .map((h) => ({ title: h.title ?? null, subtitle: h.subtitle ?? h.message ?? null }));
+  // Schlafarrangements: stops[] mit name + description.descriptions[].text
+  let sleeping = (pdp.sleepingArrangements?.stops ?? []).map((s) => ({
+    room: s.name ?? null,
+    beds: (s.description?.descriptions ?? []).map((d) => d.text).filter(Boolean).join(', ') || null,
+    photoId: s.items?.[0]?.image?.imageId ?? null,
+  }));
+  if (!sleeping.length) {
+    const seenSl = new Set();
+    sleeping = deepFind(pdp.sleepingArrangements ?? {}, (o) => typeof o.title === 'string' && typeof o.subtitle === 'string')
+      .map((a) => ({ room: a.title, beds: a.subtitle, photoId: null }))
+      .filter((a) => { const k = `${a.room}|${a.beds}`; return seenSl.has(k) ? false : seenSl.add(k); });
+  }
 
   const q = pdp.quality ?? {};
   const ratings = {
     overall: capJson(q.listingRatingStats?.overallRatingStats ?? pdp.listingRatingStats?.overallRatingStats ?? null, 2000),
-    categories: (q.categoryRatings ?? []).map((c) => ({ category: c.categoryType ?? null, value: c.localizedRating ?? null })),
-    distribution: capJson(q.ratingDistribution ?? null, 3000),
+    isGuestFavorite: q.isGuestFavorite ?? null,
+    categories: (q.categoryRatings ?? []).map((c) => ({ category: c.categoryType ?? null, label: c.label ?? null, value: c.localizedRating ?? null })),
+    distribution: (q.ratingDistribution ?? []).map((d) => ({ stars: d.label, share: d.localizedRating })),
+    topics: (q.reviewTags ?? []).map((t) => ({ topic: t.localizedName ?? t.name, count: t.count })),
   };
+
+  // Nachbarschaftstext des Hosts (Original-Sprache der Anzeige)
+  const neighborhoodGuide = deepFind(pdp.location ?? {}, (o) => typeof o.localizedString === 'string')[0]?.localizedString ?? null;
 
   return {
     title,
     description,
-    highlights,
+    highlights: capJson(pdp.highlights, 3000),
     sleeping,
     amenities,
     photos,
     ratings,
-    locationTexts: uniq(strings(sec(/^LOCATION/), 'htmlText')),
+    houseRules: capJson(pdp.rules ?? pdp.thingsToKnow, 4000),
+    neighborhoodGuide: neighborhoodGuide ? neighborhoodGuide.slice(0, 6000) : null,
     pdp: {
       keys: Object.keys(pdp),
       sleepingArrangements: capJson(pdp.sleepingArrangements),
       hostInfo: capJson(pdp.hostInfo),
-      location: capJson(pdp.location),
+      location: capJson({ ...pdp.location, seeAllLocationDetails: undefined }),
       quality: capJson(pdp.quality),
     },
   };
@@ -351,7 +405,6 @@ async function scrape(target, opts) {
           const lines = r.text.split('\n').map((s) => s.trim()).filter(Boolean);
           return { id: r.id, reviewer: lines[0] ?? null, meta: lines[1] ?? null, text: lines.slice(2).join('\n') };
         });
-        dialogs.reviewsHeader = ((await dialogText(page)) || '').slice(0, 3000);
         await closeDialog(page);
       }
     }
@@ -359,8 +412,7 @@ async function scrape(target, opts) {
     const reviews = apiReviews.length >= domReviews.length ? apiReviews : domReviews;
 
     if (opts.debug) {
-      console.log(`[DBG SUMMARY] amenities=${data.amenities.length} sleeping=${data.sleeping.length} photos=${data.photos.length} highlights=${data.highlights.length} reviews=${reviews.length} cats=${data.ratings.categories.length} descLen=${(data.description || '').length} pdpKeys=${data.pdp.keys.join(',')} errors=${JSON.stringify(errors)}`);
-      console.log(`[DBG SLEEPING] ${JSON.stringify(data.pdp.sleepingArrangements).slice(0, 3400)}`);
+      console.log(`[DBG SUMMARY] amenities=${data.amenities.length} sleeping=${data.sleeping.length} photos=${data.photos.length} reviews=${reviews.length} cats=${data.ratings.categories.length} descLen=${(data.description || '').length} guideLen=${(data.neighborhoodGuide || '').length} errors=${JSON.stringify(errors)}`);
     }
 
     return {
@@ -368,6 +420,7 @@ async function scrape(target, opts) {
       fetchedAt: new Date().toISOString(),
       listingId: target.id,
       url: target.url,
+      reviewsIncluded: opts.reviews,
       pageTitle,
       ...data,
       reviews,
@@ -395,32 +448,79 @@ function keyOk(given) {
   const b = Buffer.from(API_KEY);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
+function requireAuth(req, u) {
+  if (!API_KEY) throw httpError(503, 'API_KEY ist nicht gesetzt');
+  const given =
+    (req.headers.authorization || '').replace(/^Bearer\s+/i, '') ||
+    req.headers['x-api-key'] ||
+    u.searchParams.get('key');
+  if (!keyOk(given)) throw httpError(401, 'Unauthorized');
+}
+const idFrom = (s) => {
+  const m = String(s || '').match(/(\d{6,})/);
+  if (!m) throw httpError(400, 'Parameter id oder url fehlt (Listing-ID oder Airbnb-URL)');
+  return m[1];
+};
 
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
-  const pretty = u.searchParams.get('pretty') === '1';
+  const sp = u.searchParams;
+  const pretty = sp.get('pretty') === '1';
+  const slim = sp.get('slim') === '1';
   try {
-    if (u.pathname === '/health') return send(res, 200, { ok: true });
-    if (u.pathname === '/scrape') {
-      if (!API_KEY) throw httpError(503, 'API_KEY ist nicht gesetzt');
-      const given =
-        (req.headers.authorization || '').replace(/^Bearer\s+/i, '') ||
-        req.headers['x-api-key'] ||
-        u.searchParams.get('key');
-      if (!keyOk(given)) throw httpError(401, 'Unauthorized');
-      const target = parseListingUrl(u.searchParams.get('url') || '');
-      const opts = {
-        reviews: u.searchParams.get('reviews') !== '0',
-        debug: u.searchParams.get('debug') === '1',
-        locale: u.searchParams.get('locale') || 'de-DE',
-      };
-      const data = await enqueue(() => withTimeout(scrape(target, opts), TOTAL_TIMEOUT));
-      return send(res, 200, data, pretty);
+    if (u.pathname === '/health') return send(res, 200, { ok: true, cached: cache.size, running: inflight.size });
+
+    // Übersicht über alle gespeicherten Ergebnisse
+    if (u.pathname === '/cache') {
+      requireAuth(req, u);
+      const items = [...cache.values()].map((d) => ({
+        id: d.listingId, title: d.title, fetchedAt: d.fetchedAt, ageSec: ageSec(d), fresh: isFresh(d), reviews: d.reviewCount,
+      }));
+      return send(res, 200, { ok: true, ttlMin: CACHE_TTL_MS / 60000, running: [...inflight.keys()], items }, pretty);
     }
-    send(res, 404, { error: 'Not found. Nutze GET /scrape?url=<airbnb-url>' });
+
+    // Gespeichertes Ergebnis sofort abrufen (id oder url)
+    if (u.pathname === '/cached') {
+      requireAuth(req, u);
+      const id = idFrom(sp.get('id') || sp.get('url'));
+      const d = cache.get(id);
+      if (d) return send(res, 200, { ...view(d, slim), cache: { hit: true, ageSec: ageSec(d), fresh: isFresh(d), running: inflight.has(id) } }, pretty);
+      if (inflight.has(id)) return send(res, 202, { ok: true, status: 'running', id, hint: 'In ca. 30–60 s erneut abrufen' }, pretty);
+      return send(res, 404, { ok: false, cached: false, id, lastError: lastError.get(id) ?? null, hint: 'Zuerst /scrape?async=1&url=… starten' }, pretty);
+    }
+
+    if (u.pathname === '/scrape') {
+      requireAuth(req, u);
+      const target = parseListingUrl(sp.get('url') || '');
+      const opts = {
+        reviews: sp.get('reviews') !== '0',
+        debug: sp.get('debug') === '1',
+        locale: sp.get('locale') || 'de-DE',
+      };
+      const refresh = sp.get('refresh') === '1';
+      const asyncMode = sp.get('async') === '1';
+
+      // 1) Frischer Cache-Treffer → sofort
+      const hit = cache.get(target.id);
+      if (!refresh && isFresh(hit) && (!opts.reviews || hit.reviewsIncluded)) {
+        return send(res, 200, { ...view(hit, slim), cache: { hit: true, ageSec: ageSec(hit) } }, pretty);
+      }
+
+      // 2) Async: starten und sofort antworten
+      if (asyncMode) {
+        startScrape(target, opts);
+        return send(res, 202, { ok: true, status: 'running', id: target.id, pollUrl: `/cached?id=${target.id}&slim=1`, hint: 'Nach ca. 30–60 s unter /cached abrufen' }, pretty);
+      }
+
+      // 3) Sync: warten
+      const data = await startScrape(target, opts);
+      return send(res, 200, { ...view(data, slim), cache: { hit: false } }, pretty);
+    }
+
+    send(res, 404, { error: 'Endpunkte: /scrape?url=…[&async=1][&refresh=1][&slim=1], /cached?id=…, /cache, /health' });
   } catch (e) {
     send(res, e.status || 500, { ok: false, error: e.message }, pretty);
   }
 });
-server.listen(PORT, () => console.log(`listing-audit-scraper läuft auf :${PORT}`));
+server.listen(PORT, () => console.log(`listing-audit-scraper läuft auf :${PORT} (Cache ${cache.size} Einträge, TTL ${CACHE_TTL_MS / 60000} min)`));
 process.on('SIGTERM', async () => { await browser?.close().catch(() => {}); process.exit(0); });
