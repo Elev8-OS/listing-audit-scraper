@@ -6,8 +6,12 @@ import { chromium } from 'playwright';
 
 const PORT = Number(process.env.PORT || 3000);
 const API_KEY = process.env.API_KEY || '';
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+const PHOTO_MODEL = process.env.PHOTO_MODEL || 'claude-sonnet-5-5';
+const PHOTO_MAX = Number(process.env.PHOTO_MAX || 30);
 const NAV_TIMEOUT = 45000;
 const TOTAL_TIMEOUT = 150000;
+const PHOTO_TIMEOUT = 240000;
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MIN || 360) * 60000; // Standard: 6 Stunden
 const DATA_DIR = process.env.DATA_DIR || '/tmp/listing-audit-cache'; // mit Railway-Volume dauerhaft
 const UA =
@@ -16,22 +20,30 @@ const UA =
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
 /* ---------- Cache (Speicher + Datei) ---------- */
-const cache = new Map();
+const cache = new Map();       // Scrape-Ergebnisse
+const photoCache = new Map();  // Foto-Analysen
 const lastError = new Map();
+const photoErr = new Map();
 const inflight = new Map();
+const photoJobs = new Map();
 try {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   for (const f of fs.readdirSync(DATA_DIR)) {
     if (!f.endsWith('.json')) continue;
     try {
       const j = JSON.parse(fs.readFileSync(path.join(DATA_DIR, f), 'utf8'));
-      if (j.listingId) cache.set(j.listingId, j);
+      if (f.startsWith('photos-')) { if (j.listingId) photoCache.set(j.listingId, j); }
+      else if (j.listingId) cache.set(j.listingId, j);
     } catch {}
   }
 } catch (e) { console.log('Cache-Verzeichnis nicht nutzbar:', e.message); }
 function cacheSet(data) {
   cache.set(data.listingId, data);
   fs.writeFile(path.join(DATA_DIR, `${data.listingId}.json`), JSON.stringify(data), () => {});
+}
+function photoCacheSet(data) {
+  photoCache.set(data.listingId, data);
+  fs.writeFile(path.join(DATA_DIR, `photos-${data.listingId}.json`), JSON.stringify(data), () => {});
 }
 const ageSec = (d) => Math.round((Date.now() - Date.parse(d.fetchedAt)) / 1000);
 const isFresh = (d) => Boolean(d) && Date.now() - Date.parse(d.fetchedAt) < CACHE_TTL_MS;
@@ -118,7 +130,6 @@ const firstKey = (root, key) => {
   const f = deepFind(root, (o) => o[key] != null, 1)[0];
   return f ? f[key] : null;
 };
-const strings = (root, key) => deepFind(root, (o) => typeof o[key] === 'string').map((o) => o[key]);
 const uniq = (arr) => [...new Set(arr)];
 
 // Airbnb-Rauschen entfernen (Logging, Typnamen, Nulls)
@@ -217,7 +228,7 @@ function normalize(sections, pdp) {
     topics: (q.reviewTags ?? []).map((t) => ({ topic: t.localizedName ?? t.name, count: t.count })),
   };
 
-  // Nachbarschaftstext des Hosts (Original-Sprache der Anzeige)
+  // Nachbarschaftstext des Hosts
   const neighborhoodGuide = deepFind(pdp.location ?? {}, (o) => typeof o.localizedString === 'string')[0]?.localizedString ?? null;
 
   return {
@@ -352,8 +363,9 @@ async function scrape(target, opts) {
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.waitForTimeout(500);
 
-    // Sichtbarer Seitentext (Fallback + Kontext)
+    // Sichtbarer Seitentext (Fallback + Kontext) und Titelbild
     const pageText = await page.evaluate(() => (document.querySelector('main') || document.body).innerText).catch(() => null);
+    const coverUrl = await page.$eval('meta[property="og:image"]', (e) => e.content).catch(() => null);
 
     // Eingebetteter State + API-Antworten
     const states = await page.evaluate(() =>
@@ -422,6 +434,7 @@ async function scrape(target, opts) {
       url: target.url,
       reviewsIncluded: opts.reviews,
       pageTitle,
+      coverUrl: coverUrl ? stripQuery(coverUrl) : null,
       ...data,
       reviews,
       reviewCount: reviews.length,
@@ -436,6 +449,116 @@ async function scrape(target, opts) {
   } finally {
     await ctx.close().catch(() => {});
   }
+}
+
+/* ---------- Foto-Analyse (Claude Bildanalyse) ---------- */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const k = i++;
+      try { out[k] = await fn(items[k], k); } catch (e) { out[k] = { error: e.message }; }
+    }
+  }));
+  return out;
+}
+
+async function fetchImageB64(url) {
+  const r = await fetch(`${stripQuery(url)}?im_w=1200`, {
+    headers: { accept: 'image/jpeg,image/webp,image/png,*/*;q=0.5', 'user-agent': UA },
+  });
+  if (!r.ok) throw new Error(`Bild nicht ladbar (${r.status})`);
+  let type = (r.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
+  if (!/^image\/(jpeg|png|gif|webp)$/.test(type)) type = 'image/jpeg';
+  const buf = Buffer.from(await r.arrayBuffer());
+  return { type, data: buf.toString('base64'), bytes: buf.length };
+}
+
+const photoSig = (d) => crypto.createHash('sha1').update((d.photos || []).map((p) => p.url).join('|')).digest('hex');
+
+const PHOTO_INSTRUCTIONS = `Bewerte die Fotos dieses Airbnb-Listings für einen Listing-Audit. Beurteile NUR, was du auf den Bildern wirklich siehst; bei Unsicherheit schreibe "unklar". Sei konkret und knapp.
+
+Antworte AUSSCHLIESSLICH mit gültigem JSON (kein Text davor oder danach, keine Markdown-Zäune) in genau dieser Form:
+{
+  "photos": [
+    {"position": 1, "room": "Küche|Wohnzimmer|Esszimmer|Schlafzimmer|Bad|Balkon/Terrasse|Eingang/Flur|Treppenhaus/Lift|Aussen/Fassade|Detail|Sonstiges",
+     "shows": "ein kurzer Satz, was zu sehen ist",
+     "brightness": 1-5, "sharpness": 1-5, "composition": 1-5, "tidiness": 1-5,
+     "issues": ["z. B. zu dunkel, schiefer Winkel, Unordnung, Gegenlicht, Personen/Auto sichtbar"],
+     "keep": true|false,
+     "tip": "eine konkrete Verbesserung oder leer"}
+  ],
+  "cover": {"position": <Nr. des aktuellen Titelbilds oder null>, "verdict": "gut|mittel|schwach", "reason": "ein Satz", "betterPosition": <Nr. oder null>},
+  "recommendedOrder": [<Positionen in empfohlener Reihenfolge, die ersten 5 zählen am meisten>],
+  "roomCoverage": [{"room": "Küche", "photos": <Anzahl>, "verdict": "ausreichend|zu wenig|fehlt"}],
+  "amenityCoverage": [{"amenity": "<Name aus der Liste>", "photographed": true|false|"unklar", "positions": [<Nr.>]}],
+  "missingMotifs": ["Motive, die ein Gast erwartet und die fehlen"],
+  "overall": {"score": 0-100, "grade": "A|B|C|D|F", "summary": "2-3 Sätze", "topFixes": ["max. 5, nach Wirkung sortiert"]}
+}
+Skala 1 = schlecht, 5 = sehr gut. "amenityCoverage": nur Ausstattung, die man fotografieren kann (z. B. Küche, Backofen, Geschirrspüler, Waschmaschine, Trockner, Fernseher, Arbeitsplatz, Esstisch, Babybett, Balkon, Lift, Kaffeemaschine, Brettspiele, Eingang). Keine Dinge wie WLAN oder Check-in.`;
+
+async function analyzePhotos(d) {
+  if (!ANTHROPIC_API_KEY) throw httpError(503, 'ANTHROPIC_API_KEY ist in den Railway-Variablen nicht gesetzt');
+  const photos = (d.photos || []).slice(0, PHOTO_MAX);
+  if (!photos.length) throw httpError(422, 'Keine Fotos im Scrape-Ergebnis');
+
+  const imgs = await mapLimit(photos, 5, (p) => fetchImageB64(p.url));
+  const cover = d.coverUrl ? stripQuery(d.coverUrl) : null;
+  const amen = (d.amenities || []).filter((a) => a.available).map((a) => a.name).join(', ');
+  const sleeping = (d.sleeping || []).map((s) => `${s.room}: ${s.beds}`).join('; ');
+
+  const content = [{
+    type: 'text',
+    text: `Listing: "${d.title}". Schlafarrangements: ${sleeping || 'unbekannt'}.\nAmenities laut Airbnb: ${amen}.\nIm Folgenden ${photos.length} Fotos in Airbnb-Reihenfolge, jeweils mit Nummer und Beschriftung.`,
+  }];
+  const skipped = [];
+  photos.forEach((p, i) => {
+    const img = imgs[i];
+    if (!img || img.error || !img.data) { skipped.push({ position: p.position, error: img?.error || 'unbekannt' }); return; }
+    content.push({ type: 'text', text: `Foto ${p.position} · Beschriftung: ${p.caption ?? '–'}${cover && p.url === cover ? ' · ist das aktuelle TITELBILD' : ''}` });
+    content.push({ type: 'image', source: { type: 'base64', media_type: img.type, data: img.data } });
+  });
+  content.push({ type: 'text', text: PHOTO_INSTRUCTIONS });
+
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model: PHOTO_MODEL, max_tokens: 8000, messages: [{ role: 'user', content }] }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw httpError(502, `Anthropic ${r.status}: ${j?.error?.message || 'Fehler'}`);
+  const text = (j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
+  let analysis = null;
+  try { analysis = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, '').trim()); } catch {
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) { try { analysis = JSON.parse(m[0]); } catch {} }
+  }
+  return {
+    ok: true,
+    listingId: d.listingId,
+    analyzedAt: new Date().toISOString(),
+    sig: photoSig(d),
+    model: PHOTO_MODEL,
+    photosAnalyzed: photos.length - skipped.length,
+    skipped,
+    coverUrl: cover,
+    usage: j.usage ?? null,
+    analysis,
+    ...(analysis ? {} : { raw: text }),
+  };
+}
+
+function startPhotos(d) {
+  const id = d.listingId;
+  if (photoJobs.has(id)) return photoJobs.get(id);
+  const p = withTimeout(analyzePhotos(d), PHOTO_TIMEOUT)
+    .then((r) => { photoErr.delete(id); photoCacheSet(r); return r; })
+    .catch((e) => { photoErr.set(id, { message: e.message, at: new Date().toISOString() }); throw e; })
+    .finally(() => photoJobs.delete(id));
+  p.catch(() => {});
+  photoJobs.set(id, p);
+  return p;
 }
 
 /* ---------- HTTP ---------- */
@@ -468,15 +591,18 @@ const server = http.createServer(async (req, res) => {
   const pretty = sp.get('pretty') === '1';
   const slim = sp.get('slim') === '1';
   try {
-    if (u.pathname === '/health') return send(res, 200, { ok: true, cached: cache.size, running: inflight.size });
+    if (u.pathname === '/health') {
+      return send(res, 200, { ok: true, cached: cache.size, photoAnalyses: photoCache.size, running: inflight.size + photoJobs.size, photoAnalysisReady: Boolean(ANTHROPIC_API_KEY) });
+    }
 
     // Übersicht über alle gespeicherten Ergebnisse
     if (u.pathname === '/cache') {
       requireAuth(req, u);
       const items = [...cache.values()].map((d) => ({
         id: d.listingId, title: d.title, fetchedAt: d.fetchedAt, ageSec: ageSec(d), fresh: isFresh(d), reviews: d.reviewCount,
+        photoAnalysis: photoCache.has(d.listingId) ? photoCache.get(d.listingId).analyzedAt : null,
       }));
-      return send(res, 200, { ok: true, ttlMin: CACHE_TTL_MS / 60000, running: [...inflight.keys()], items }, pretty);
+      return send(res, 200, { ok: true, ttlMin: CACHE_TTL_MS / 60000, running: [...inflight.keys()], runningPhotos: [...photoJobs.keys()], items }, pretty);
     }
 
     // Gespeichertes Ergebnis sofort abrufen (id oder url)
@@ -500,27 +626,46 @@ const server = http.createServer(async (req, res) => {
       const refresh = sp.get('refresh') === '1';
       const asyncMode = sp.get('async') === '1';
 
-      // 1) Frischer Cache-Treffer → sofort
       const hit = cache.get(target.id);
       if (!refresh && isFresh(hit) && (!opts.reviews || hit.reviewsIncluded)) {
         return send(res, 200, { ...view(hit, slim), cache: { hit: true, ageSec: ageSec(hit) } }, pretty);
       }
-
-      // 2) Async: starten und sofort antworten
       if (asyncMode) {
         startScrape(target, opts);
         return send(res, 202, { ok: true, status: 'running', id: target.id, pollUrl: `/cached?id=${target.id}&slim=1`, hint: 'Nach ca. 30–60 s unter /cached abrufen' }, pretty);
       }
-
-      // 3) Sync: warten
       const data = await startScrape(target, opts);
       return send(res, 200, { ...view(data, slim), cache: { hit: false } }, pretty);
     }
 
-    send(res, 404, { error: 'Endpunkte: /scrape?url=…[&async=1][&refresh=1][&slim=1], /cached?id=…, /cache, /health' });
+    // Foto-Analyse: braucht ein vorhandenes Scrape-Ergebnis im Cache
+    if (u.pathname === '/analyze-photos') {
+      requireAuth(req, u);
+      const id = idFrom(sp.get('id') || sp.get('url'));
+      const refresh = sp.get('refresh') === '1';
+      const asyncMode = sp.get('async') === '1';
+      const d = cache.get(id);
+      const hit = photoCache.get(id);
+      if (!refresh && hit && (!d || hit.sig === photoSig(d))) {
+        return send(res, 200, { ...hit, cache: { hit: true } }, pretty);
+      }
+      if (!d) throw httpError(404, 'Kein Scrape-Ergebnis im Cache. Zuerst /scrape?url=… ausführen.');
+      if (!ANTHROPIC_API_KEY) throw httpError(503, 'ANTHROPIC_API_KEY ist in den Railway-Variablen nicht gesetzt');
+      if (asyncMode) {
+        startPhotos(d);
+        return send(res, 202, { ok: true, status: 'running', id, hint: 'Nach ca. 60–120 s erneut unter /analyze-photos?id=… abrufen', lastError: photoErr.get(id) ?? null }, pretty);
+      }
+      if (photoJobs.has(id) && sp.get('wait') === '0') {
+        return send(res, 202, { ok: true, status: 'running', id }, pretty);
+      }
+      const r = await startPhotos(d);
+      return send(res, 200, { ...r, cache: { hit: false } }, pretty);
+    }
+
+    send(res, 404, { error: 'Endpunkte: /scrape?url=…[&async=1][&refresh=1][&slim=1], /cached?id=…, /analyze-photos?id=…[&async=1][&refresh=1], /cache, /health' });
   } catch (e) {
     send(res, e.status || 500, { ok: false, error: e.message }, pretty);
   }
 });
-server.listen(PORT, () => console.log(`listing-audit-scraper läuft auf :${PORT} (Cache ${cache.size} Einträge, TTL ${CACHE_TTL_MS / 60000} min)`));
+server.listen(PORT, () => console.log(`listing-audit-scraper läuft auf :${PORT} (Cache ${cache.size} Einträge, Foto-Analysen ${photoCache.size}, TTL ${CACHE_TTL_MS / 60000} min, Bildanalyse ${ANTHROPIC_API_KEY ? 'bereit' : 'KEY FEHLT'})`));
 process.on('SIGTERM', async () => { await browser?.close().catch(() => {}); process.exit(0); });
