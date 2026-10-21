@@ -41,9 +41,7 @@ function parseListingUrl(raw) {
   return { id: m[1], host, url: `https://www.${host}/rooms/${m[1]}` };
 }
 
-// Airbnb liefert die Seite als verschachteltes JSON mit "sections".
-// Wir behalten pro sectionId ALLE Wrapper (Section + Geschwister-Felder), weil der Inhalt
-// je nach Seite im "section"-Objekt oder daneben liegen kann und manche Kopien nur Stubs sind.
+// Pro sectionId ALLE Wrapper behalten (Section-Container ODER sbui-"sectionData").
 function collectSections(root) {
   const out = {};
   const seen = new WeakSet();
@@ -51,7 +49,7 @@ function collectSections(root) {
     if (!n || typeof n !== 'object' || seen.has(n)) return;
     seen.add(n);
     if (Array.isArray(n)) { n.forEach(walk); return; }
-    if (typeof n.sectionId === 'string' && 'section' in n) {
+    if (typeof n.sectionId === 'string' && ('section' in n || 'sectionData' in n)) {
       (out[n.sectionId] ||= []).push(n);
     }
     for (const k in n) walk(n[k]);
@@ -81,6 +79,26 @@ const firstKey = (root, key) => {
 const strings = (root, key) => deepFind(root, (o) => typeof o[key] === 'string').map((o) => o[key]);
 const uniq = (arr) => [...new Set(arr)];
 
+// Debug: Pfade zu Keys finden, die zu re passen
+function findPaths(root, re, max = 60) {
+  const out = [];
+  const seen = new WeakSet();
+  (function walk(n, path) {
+    if (out.length >= max || !n || typeof n !== 'object' || seen.has(n)) return;
+    seen.add(n);
+    for (const k in n) {
+      const p = Array.isArray(n) ? `${path}[${k}]` : `${path}.${k}`;
+      if (!Array.isArray(n) && re.test(k)) {
+        const v = n[k];
+        const t = Array.isArray(v) ? `array(${v.length})` : v === null ? 'null' : typeof v;
+        out.push(`${p} : ${t}`);
+      }
+      walk(n[k], p);
+    }
+  })(root, '$');
+  return out;
+}
+
 function stripQuery(u) { return (u || '').split('?')[0]; }
 function isListingPhoto(src) {
   return /muscache\.com\/im\/pictures/.test(src) &&
@@ -89,9 +107,8 @@ function isListingPhoto(src) {
 
 function normalize(sections) {
   const sec = (re) => Object.keys(sections).filter((k) => re.test(k)).map((k) => sections[k]);
-  const first = (re) => sec(re);
 
-  const title = firstKey(first(/^TITLE/), 'title');
+  const title = firstKey(sec(/^TITLE/), 'title');
 
   const descParts = deepFind(
     [...sec(/^DESCRIPTION_MODAL/), ...sec(/^DESCRIPTION_DEFAULT/)],
@@ -139,27 +156,22 @@ function normalize(sections) {
             JSON.stringify({ category: r.categoryType, label: r.label ?? null, value: r.localizedRating ?? r.value ?? null })),
         ).map((s) => JSON.parse(s)),
         distribution: firstKey(rv, 'ratingDistribution') ?? null,
-        topics: uniq(strings(rv, 'localizedTitle').concat(strings(rv, 'tagName'))),
       }
     : null;
 
   return {
     title,
     description,
-    overview: uniq(strings(sec(/^OVERVIEW/), 'title')),
     highlights: deepFind(sec(/^HIGHLIGHTS/), (o) => typeof o.title === 'string' && 'subtitle' in o)
       .map((h) => ({ title: h.title, subtitle: h.subtitle })),
     sleeping,
     amenities,
     photos,
     ratings,
-    guestFavoriteBanner: uniq(strings(sec(/^GUEST_FAVORITE/), 'title')),
-    hostTexts: uniq(strings(sec(/^(MEET_YOUR_HOST|HOST_OVERVIEW)/), 'title')),
     houseRules: uniq(
       deepFind(sec(/^POLICIES/), (o) => typeof o.title === 'string')
         .map((o) => JSON.stringify({ title: o.title, text: o.subtitle ?? null })),
     ).map((s) => JSON.parse(s)),
-    location: firstKey(sec(/^LOCATION/), 'subtitle'),
     locationTexts: uniq(strings(sec(/^LOCATION/), 'htmlText')),
   };
 }
@@ -179,7 +191,6 @@ function extractReviews(roots) {
         reviewerLocation: o.localizedReviewerLocation ?? null,
         text: o.comments,
         hostResponse: o.response ?? null,
-        needsTranslation: o.localizedReview?.needsTranslation ?? null,
       });
     }
   }
@@ -218,6 +229,7 @@ async function openDialogBy(page, regex, label, errors) {
   }
 }
 const closeDialog = async (page) => { await page.keyboard.press('Escape').catch(() => {}); await page.waitForTimeout(600); };
+const dialogText = (page) => page.$eval('[role="dialog"]', (e) => e.innerText).catch(() => null);
 
 async function scrollDialog(page, countSel, max = 60) {
   let stable = 0, last = -1;
@@ -256,6 +268,7 @@ async function scrape(target, opts) {
 
   const apiSections = {};
   const apiOps = new Set();
+  const apiRoots = [];
   const reviewRoots = [];
   page.on('response', async (res) => {
     try {
@@ -266,6 +279,7 @@ async function scrape(target, opts) {
       if (!/StaysPdp/i.test(op)) return;
       if (!(res.headers()['content-type'] || '').includes('json')) return;
       const json = await res.json();
+      apiRoots.push({ op, json });
       if (/Reviews/i.test(op)) reviewRoots.push(json);
       mergeSections(apiSections, collectSections(json));
     } catch {}
@@ -278,15 +292,22 @@ async function scrape(target, opts) {
     await page.waitForTimeout(2000);
 
     // Lazy-Sections laden
-    for (let i = 0; i < 8; i++) { await page.mouse.wheel(0, 1400); await page.waitForTimeout(350); }
+    for (let i = 0; i < 10; i++) { await page.mouse.wheel(0, 1400); await page.waitForTimeout(350); }
     await page.evaluate(() => window.scrollTo(0, 0));
+    await page.waitForTimeout(500);
 
-    // 1) Eingebetteter State + API-Antworten (alle Kopien behalten)
+    // 0) Sichtbarer Seitentext (verlässlichster Fallback; wird später vom LLM ausgewertet)
+    const pageText = await page.evaluate(() => (document.querySelector('main') || document.body).innerText).catch(() => null);
+
+    // 1) Eingebetteter State + API-Antworten
     const states = await page.evaluate(() =>
       [...document.querySelectorAll('script[id^="data-deferred-state"]')].map((s) => s.textContent),
     );
+    const stateRoots = [];
     const sections = {};
-    for (const t of states) { try { mergeSections(sections, collectSections(JSON.parse(t))); } catch {} }
+    for (const t of states) {
+      try { const j = JSON.parse(t); stateRoots.push(j); mergeSections(sections, collectSections(j)); } catch {}
+    }
     mergeSections(sections, apiSections);
     const data = normalize(sections);
 
@@ -294,11 +315,11 @@ async function scrape(target, opts) {
     const h1 = await page.locator('h1').first().textContent().catch(() => null);
     data.title = data.title || h1;
 
-    // 2) Fallbacks per Dialog
+    // 2) Dialoge: Amenities (falls State leer), Fotos (falls wenige)
     const dialogs = {};
     if (!data.amenities.length) {
       if (await openDialogBy(page, /Alle\s+\d+\s+Ausstattung|Show all\s+\d+\s+amenities/i, 'Amenities', errors)) {
-        dialogs.amenitiesText = await page.$eval('[role="dialog"]', (e) => e.innerText).catch(() => null);
+        dialogs.amenitiesText = await dialogText(page);
         await closeDialog(page);
       }
     }
@@ -315,7 +336,7 @@ async function scrape(target, opts) {
       }
     }
 
-    // 3) Reviews im Volltext (Dialog öffnen + scrollen → Airbnb lädt weitere Seiten per API)
+    // 3) Reviews im Volltext
     let domReviews = [];
     if (opts.reviews) {
       if (await openDialogBy(page, /Alle\s+\d+\s+\S*[Bb]ewertungen|Show all\s+\d+\s+reviews/i, 'Reviews', errors)) {
@@ -327,23 +348,21 @@ async function scrape(target, opts) {
           const lines = r.text.split('\n').map((s) => s.trim()).filter(Boolean);
           return { id: r.id, reviewer: lines[0] ?? null, meta: lines[1] ?? null, text: lines.slice(2).join('\n') };
         });
+        // Kopf des Review-Dialogs (Gesamtnote, Kategorien, "Gäste erwähnen")
+        dialogs.reviewsHeader = ((await dialogText(page)) || '').slice(0, 3000);
         await closeDialog(page);
       }
     }
     const apiReviews = extractReviews([...reviewRoots, ...Object.values(sections)]);
     const reviews = apiReviews.length >= domReviews.length ? apiReviews : domReviews;
 
-    // Debug: Roh-Struktur ins Railway-Log (nur mit &debug=1)
+    // Debug: ins Railway-Log (nur mit &debug=1)
     if (opts.debug) {
-      const want = /^(TITLE|AMENITIES|SLEEPING|REVIEWS|HIGHLIGHTS|OVERVIEW|GUEST_FAVORITE|HOST_OVERVIEW|POLICIES|LOCATION)/;
-      for (const [id, arr] of Object.entries(sections)) {
-        console.log(`[DBG KEYS ${id}] copies=${arr.length} wrapperKeys=${JSON.stringify(arr.map((w) => Object.keys(w)))} sizes=${JSON.stringify(arr.map((w) => JSON.stringify(w).length))}`);
-        if (want.test(id)) {
-          const biggest = [...arr].sort((a, b) => JSON.stringify(b).length - JSON.stringify(a).length)[0];
-          logChunks(id, biggest, 9000);
-        }
-      }
-      console.log(`[DBG] reviews api=${apiReviews.length} dom=${domReviews.length} errors=${JSON.stringify(errors)}`);
+      const re = /amenit|sleeping|arrangement|highlight|ratingDistribution|overallRating|categoryType|localizedRating|seeAll|sbui|sectionData/i;
+      stateRoots.forEach((r, i) => findPaths(r, re).forEach((p) => console.log(`[DBG PATH state${i}] ${p}`)));
+      apiRoots.forEach(({ op, json }) => findPaths(json, re, 25).forEach((p) => console.log(`[DBG PATH api:${op}] ${p}`)));
+      console.log(`[DBG SUMMARY] amenities=${data.amenities.length} sleeping=${data.sleeping.length} photos=${data.photos.length} highlights=${data.highlights.length} reviews=${reviews.length} descLen=${(data.description || '').length} pageTextLen=${(pageText || '').length} errors=${JSON.stringify(errors)}`);
+      console.log(`[DBG sectionIds] ${Object.keys(sections).join(',')}`);
     }
 
     return {
@@ -356,6 +375,7 @@ async function scrape(target, opts) {
       reviews,
       reviewCount: reviews.length,
       dialogs,
+      pageText: pageText ? pageText.slice(0, 40000) : null,
       debug: {
         sectionIds: Object.keys(sections),
         apiOps: [...apiOps],
