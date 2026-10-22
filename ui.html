@@ -47,6 +47,8 @@ small{color:var(--mute)}
     <button id="onlyScrape">Nur Scrape</button>
     <button id="onlyPhotos">Nur Foto-Analyse</button>
     <button id="stat">Status</button>
+    <button id="stats">Statistik</button>
+    <button id="pdft">PDF testen</button>
   </div>
 </div>
 <div class="card">
@@ -125,6 +127,8 @@ async function download(path,name,btn){
 }
 $('#all').onclick=()=>run('all');$('#onlyScrape').onclick=()=>run('scrape');$('#onlyPhotos').onclick=()=>run('photos');
 $('#stat').onclick=async()=>{try{const r=await api('/cache');const it=(r.json&&r.json.items)||[];msg(it.length?it.map(i=>i.id+': '+(i.title||'')+' · Scrape vor '+Math.round(i.ageSec/60)+' Min'+(i.photoAnalysis?' · Foto-Analyse vorhanden':'')).join('\n'):'Noch nichts gespeichert.'+((r.json&&r.json.running&&r.json.running.length)?' Läuft gerade: '+r.json.running.join(', '):''),'ok')}catch(e){msg(e.message,'err')}};
+$('#stats').onclick=async()=>{try{const r=await api('/api/stats?days=30');if(r.status!==200)throw new Error((r.json&&r.json.error)||('Fehler '+r.status));const j=r.json,f=j.funnel,p=j.rates_percent,n=k=>f[k]?f[k].u+' ('+f[k].n+')':'0';const t=['Letzte '+j.days+' Tage (Personen, in Klammern: Ereignisse)','Scans gestartet: '+n('scan_start'),'Scans fertig: '+n('scan_done')+' · Quote '+(p.scan_done_per_start??'–')+' %','Gate gesehen: '+n('gate_view')+' · '+(p.gate_view_per_scan_done??'–')+' % der fertigen Scans','Auf Gesperrtes geklickt: '+n('gate_locked_click'),'E-Mail abgeschickt: '+n('gate_submit')+' · Quote '+(p.submit_per_gate_view??'–')+' % am Gate','Leads gespeichert: '+n('lead_saved'),'E-Mail gesendet: '+n('mail_sent')+' · fehlgeschlagen '+n('mail_failed')+' · übersprungen '+n('mail_skipped'),'PDF geöffnet: '+n('pdf_open')+' · '+(p.pdf_open_per_mail??'–')+' % der Mails','Demo-Call-Klicks aus PDF: '+n('go_click')+' · '+(p.go_click_per_mail??'–')+' % der Mails','Ø Score: '+(j.avg_score??'–'),'Gesperrte Bereiche angeklickt: '+JSON.stringify(j.locked_clicks_by_zone)].join('\n');const pk=$('#peek');pk.hidden=false;pk.textContent=t;msg('Statistik geladen.','ok')}catch(e){msg(e.message,'err')}};
+$('#pdft').onclick=async()=>{try{if(!KEY.value.trim())throw new Error('Bitte den API-Schlüssel eintragen.');msg('PDF wird erzeugt … (bis zu 2 Minuten)');const r=await fetch('/api/pdf-test?lang=de&url='+encodeURIComponent($('#url').value.trim()),{headers:{authorization:'Bearer '+KEY.value.trim()}});if(!r.ok){let j=null;try{j=await r.json()}catch(x){}throw new Error((j&&j.error)||('Fehler '+r.status))}const b=await r.blob(),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='listing-health-test.pdf';a.click();msg('PDF erzeugt und heruntergeladen.','ok')}catch(e){msg(e.message,'err')}};
 $('#dl1').onclick=()=>{try{download('/cached?id='+idOf()+'&slim=1','scrape-'+idOf()+'.json')}catch(e){msg(e.message,'err')}};
 $('#dl2').onclick=()=>{try{download('/analyze-photos?id='+idOf(),'photos-'+idOf()+'.json')}catch(e){msg(e.message,'err')}};
 </script>
