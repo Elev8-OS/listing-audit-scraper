@@ -3,7 +3,9 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { generateReport, salvageJson } from './report.js';
+import { salvageJson } from './report.js';
+import { generateReportV2 } from './engine.js';
+import { marketFor } from './market.js';
 
 // Der Scraper setzt max_tokens fest auf 8000. Mit Nachdenken wird die Foto-Antwort dann abgeschnitten.
 const realFetch = globalThis.fetch;
@@ -29,8 +31,8 @@ const IP_LIMIT = Number(process.env.PUBLIC_IP_LIMIT || 3);          // neue Anal
 const IP_WINDOW = Number(process.env.IP_WINDOW_H || 168) * 3600e3;
 const read = (f) => { try { return fs.readFileSync(new URL(f, import.meta.url), 'utf8'); } catch { return null; } };
 const uiHtml = read('./ui.html') || '';
-const liveJs = () => read('./live.js') || '';
-const injectLive = (h) => (h.includes('/live.js') ? h : h.replace('</body>', '<script src="/live.js"></script></body>'));
+const liveJs = (f) => read('./' + f) || '';
+const injectLive = (h) => (h.includes('/live.js') ? h : h.replace('</body>', '<script src="/live.js"></script><script src="/live2.js"></script></body>'));
 const pageHtml = () => injectLive(read('./public/index.html') || '<!doctype html><meta charset="utf-8"><title>Listing Health</title><p style="font:16px system-ui;padding:40px">Die Seite ist noch nicht hochgeladen (public/index.html fehlt).</p>');
 
 /* ---- Hilfen ---- */
@@ -136,13 +138,14 @@ async function runReport(id, url, lang, j) {
   try {
     if (j.step !== 'report') await steps(id, url, j);
     j.step = 'report';
-    const [full, pc] = await Promise.all([local(`/cached?id=${id}`), result(id)]);
+    const [full, pc, mk] = await Promise.all([local(`/cached?id=${id}`), result(id), marketFor(id).catch((e) => { console.error('MARKT', id, e.message); return null; })]);
     if (full.status !== 200) throw new Error('Das Inserat konnte nicht gelesen werden');
-    const rep = await generateReport(full.json, pc ? { analysis: pc.analysis } : null, lang, process.env.ANTHROPIC_API_KEY || '');
+    const rep = await generateReportV2(full.json, pc ? { analysis: pc.analysis } : null, lang, process.env.ANTHROPIC_API_KEY || '');
+    rep.market = mk || null;
     const k = `${id}:${lang}`; reports.set(k, { at: Date.now(), report: rep });
     try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(repFile(k), JSON.stringify(rep)); } catch {}
     j.status = 'done';
-  } catch (e) { j.status = 'error'; j.error = e.message; }
+  } catch (e) { console.error('REPORT', id, e.message); j.status = 'error'; j.error = e.message; }
 }
 async function handleReport(req, res, u) {
   if (!API_KEY) return json(res, 503, { ok: false, error: 'Dienst nicht konfiguriert' });
@@ -200,7 +203,7 @@ http.createServer = (...args) => {
       if (req.method === 'POST' && p === '/api/lead') return await handleLead(req, res);
       if (req.method === 'GET' && p === '/api/photo-check') return await handlePhotoCheck(req, res, u);
       if (req.method === 'GET' && p === '/api/report') return await handleReport(req, res, u);
-      if (req.method === 'GET' && p === '/live.js') { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' }); return res.end(liveJs()); }
+      if (req.method === 'GET' && (p === '/live.js' || p === '/live2.js')) { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' }); return res.end(liveJs(p.slice(1))); }
     } catch (e) { return json(res, 500, { ok: false, error: 'Interner Fehler' }); }
     return handler(req, res);
   });
