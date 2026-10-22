@@ -1,6 +1,6 @@
 // Befund-Motor v2: zwei kleinere KI-Aufrufe (Analyse, Texte), geprüft, mit festen Sichtbarkeits-Signalen und Ausstattungs-Abgleich.
 import { prepare, normalize, salvageJson } from './report.js';
-export const PROMPT_VERSION = 'v6';   // bei jeder Aenderung der Prompts hochzaehlen: gespeicherte Reports werden dann neu erzeugt
+export const PROMPT_VERSION = 'v7';   // bei jeder Aenderung der Prompts hochzaehlen: gespeicherte Reports werden dann neu erzeugt
 const MODEL = process.env.REPORT_MODEL || process.env.PHOTO_MODEL || 'claude-sonnet-5-5';
 const BASE = process.env.ANTHROPIC_BASE || 'https://api.anthropic.com';
 const len = (s) => [...String(s || '')].length;
@@ -124,13 +124,13 @@ function addBedrooms(rep, bc, d, L) {
   if (!bc.odd.length) return;
   const en = L === 'en', o = bc.odd[0], more = bc.odd.length > 1, acts = rep.actions, id = 'a' + (acts.length + 1), cc = rep.cats.find((c) => c.id === 'consistency');
   const titleClaims = new RegExp(`\\b${bc.listed}\\s*[- ]?\\s*(Schlafzimmer|bedrooms?)`, 'i').test(String(d.title || '')), q = (x) => (en ? `\u201c${x}\u201d` : `\u201e${x}\u201c`);
-  acts.push({ id, cat: 'consistency', t: en ? `Name ${q(o.room)} honestly: living area with a sofa bed` : `${q(o.room)} ehrlich benennen: Wohnbereich mit Schlafsofa`, min: 5, effort: en ? '5 min' : '5 Min', impact: 'Mittel', gain: 6,
-    why: en ? `${q(o.room)} only has ${o.beds}. Guests expect a real bed in its own room and are disappointed on arrival.` : `${q(o.room)} hat laut Betten-Angabe nur ${o.beds}. G\u00e4ste erwarten ein richtiges Bett in einem eigenen Raum und sind bei der Ankunft entt\u00e4uscht.`,
-    how: en ? `List it as living room with a sofa bed, say ${bc.real} bedrooms in title and description and mention the sofa bed as an extra sleeping place.` : `Als Wohnzimmer mit Schlafsofa f\u00fchren, im Titel und in der Beschreibung ${bc.real} Schlafzimmer nennen und das Schlafsofa als zus\u00e4tzlichen Schlafplatz erw\u00e4hnen.`, ota: true });
-  rep.gaps.unshift({ says: en ? `Listing: ${q(bc.listed + ' bedrooms')}${titleClaims ? ' (also in the title)' : ''}` : `Inserat: ${q(bc.listed + ' Schlafzimmer')}${titleClaims ? ' (auch im Titel)' : ''}`,
-    real: en ? `${q(o.room)} only has ${o.beds}${more ? `, same for ${bc.odd.length - 1} more` : ''}. That is a living area with a place to sleep, not a bedroom.` : `${q(o.room)} hat nur ${o.beds}${more ? `, bei ${bc.odd.length - 1} weiteren ebenso` : ''}. Das ist ein Wohnbereich mit Schlafgelegenheit, kein Schlafzimmer.`,
-    fix: en ? `Say ${bc.real} bedrooms and list the sofa bed as an extra sleeping place.` : `${bc.real} Schlafzimmer nennen und das Schlafsofa als zus\u00e4tzlichen Schlafplatz f\u00fchren.`, cat: 'consistency', act: id });
-  if (cc) { cc.evidence.unshift(en ? `${q(o.room)} has only ${o.beds}, listed as a bedroom` : `${q(o.room)} hat nur ${o.beds}, ist aber als Schlafzimmer gelistet`); if (cc.base != null) cc.base = Math.max(40, cc.base - 10); }
+  acts.push({ id, cat: 'consistency', t: en ? `Fix the setting: ${q(o.room)} is a living area with a sofa bed` : `Einstellung korrigieren: ${q(o.room)} ist ein Wohnbereich mit Schlafsofa`, min: 5, effort: en ? '5 min' : '5 Min', impact: 'Hoch', gain: 8,
+    why: en ? `Airbnb lists ${q(o.room)} as a bedroom, but it only has ${o.beds}. That is a wrong setting: guests filter by bedrooms and expect a real bed in its own room.` : `Airbnb f\u00fchrt ${q(o.room)} als Schlafzimmer, dort steht aber nur ${o.beds}. Das ist eine falsche Einstellung: G\u00e4ste filtern nach Schlafzimmern und erwarten ein richtiges Bett in einem eigenen Raum.`,
+    how: en ? `In your Airbnb settings for rooms and beds, list it as a shared living area with a sofa bed and set the bedrooms to ${bc.real}. Then update title and description.` : `In den Airbnb-Einstellungen f\u00fcr R\u00e4ume und Betten den Raum als gemeinsamen Wohnbereich mit Schlafsofa f\u00fchren und die Zahl der Schlafzimmer auf ${bc.real} setzen. Danach Titel und Beschreibung anpassen.`, ota: false });
+  rep.gaps.unshift({ says: en ? `Airbnb setting: ${q(bc.listed + ' bedrooms')}${titleClaims ? ' (also in the title)' : ''}` : `Airbnb-Einstellung: ${q(bc.listed + ' Schlafzimmer')}${titleClaims ? ' (auch im Titel)' : ''}`,
+    real: en ? `${q(o.room)} only has ${o.beds}${more ? `, same for ${bc.odd.length - 1} more` : ''}. That is a living area, so the setting is wrong.` : `${q(o.room)} hat nur ${o.beds}${more ? `, bei ${bc.odd.length - 1} weiteren ebenso` : ''}. Das ist ein Wohnbereich, die Einstellung ist falsch.`,
+    fix: en ? `Correct it in Airbnb to ${bc.real} bedrooms and list the sofa bed as an extra sleeping place.` : `In Airbnb auf ${bc.real} Schlafzimmer korrigieren und das Schlafsofa als zus\u00e4tzlichen Schlafplatz f\u00fchren.`, cat: 'consistency', act: id });
+  if (cc) { cc.evidence.unshift(en ? `Wrong setting: ${q(o.room)} has only ${o.beds} but is listed as a bedroom` : `Falsche Einstellung: ${q(o.room)} hat nur ${o.beds}, ist aber als Schlafzimmer gelistet`); if (cc.base != null) cc.base = Math.max(40, cc.base - 12); }
   rep.titles.forEach((t) => { t.text = fit(fixBedroomClaims(t.text, bc)); });
   rep.descAfter = fixBedroomClaims(rep.descAfter, bc);
 }
