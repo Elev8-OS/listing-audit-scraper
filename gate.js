@@ -6,7 +6,7 @@
   const G = { unlocked: PDFMODE, id: null, mk: null, token: Q.get('k') || null, scanned: false, viewed: false };
   let sid = ''; try { sid = sessionStorage.getItem('lh_sid') || ''; if (!sid) { sid = Math.random().toString(36).slice(2, 12); sessionStorage.setItem('lh_sid', sid); } } catch (e) { sid = Math.random().toString(36).slice(2, 12); }
   const ev = (e, o = {}) => { if (PDFMODE) return; try { const b = JSON.stringify({ e, sid, id: G.id || undefined, lang: state.lang, ...o }); if (navigator.sendBeacon) navigator.sendBeacon('/api/event', new Blob([b], { type: 'application/json' })); else fetch('/api/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: b, keepalive: true }); } catch (x) { } };
-  const gated = () => !G.unlocked && state.reportLive && state.mode === 'prospect';
+  const gated = () => !G.unlocked && !!state.reportLive && state.mode === 'prospect';   // immer true/false: toggle(..., undefined) wuerde umschalten
 
   /* Daten aus der Report-Abfrage mitlesen */
   const _f = window.fetch;

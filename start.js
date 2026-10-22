@@ -4,7 +4,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { salvageJson } from './report.js';
-import { generateReportV2 } from './engine.js';
+import { generateReportV2, PROMPT_VERSION } from './engine.js';
 import { marketFor } from './market.js';
 import { createLeads } from './leads.js';
 import { patchPage, patchScript } from './patch.js';
@@ -118,7 +118,7 @@ async function pipeline(id, url) {
 
 /* ---- Befund-Motor: kompletter Report für die Seite ---- */
 const reports = new Map(); // id:lang -> { at, report }
-const repFile = (k) => path.join(DATA_DIR, `report-v3-${k.replace(':', '-')}.json`);
+const repFile = (k) => path.join(DATA_DIR, `report-${PROMPT_VERSION}-${k.replace(':', '-')}.json`);
 function cachedReport(k) {
   const m = reports.get(k); if (m && Date.now() - m.at < 864e5) return m.report;
   try { const f = repFile(k), st = fs.statSync(f); if (Date.now() - st.mtimeMs < 864e5) { const r = JSON.parse(fs.readFileSync(f, 'utf8')); reports.set(k, { at: st.mtimeMs, report: r }); return r; } } catch {}
