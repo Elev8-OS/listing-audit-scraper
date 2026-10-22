@@ -24,7 +24,9 @@ export async function marketFor(id) {
   const comps = ((cj && cj.listings) || []).filter((c) => Number((c.listing_info || {}).listing_id) !== myId && pm(c).ttm_revenue != null);
   if (comps.length < 5) return null;
   const mine = card(me), C = comps.map(card), col = (k) => C.map((c) => c[k]), byRev = C.slice().sort((a, b) => b.rev - a.rev), top10 = byRev.slice(0, 10), m = pm(me);
+  const p75 = dist(col('occ')).p75, pot = mine.occ != null && mine.adr != null && p75 != null && p75 > mine.occ ? Math.round((p75 - mine.occ) * 365 * mine.adr / 100) * 100 : null;
   return {
+    potential: pot && pot >= 500 ? pot : null,
     source: 'airbnb', currency: (me.pricing_info || {}).currency || 'CHF', n: C.length, area: loc.district || loc.locality || null,
     you: { ...mine, l90: { adr: m.l90d_avg_rate ?? null, occ: m.l90d_occupancy ?? null } },
     dist: { adr: dist(col('adr')), occ: dist(col('occ')), rev: dist(col('rev')) },
