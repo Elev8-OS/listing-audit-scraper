@@ -3,22 +3,26 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { generateReport } from './report.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const API_KEY = process.env.API_KEY || '';
 const DATA_DIR = process.env.DATA_DIR || '/tmp/listing-audit-cache';
 const LEAD_WEBHOOK_URL = process.env.LEAD_WEBHOOK_URL || '';
-const PUBLIC_ANALYZE = process.env.PUBLIC_ANALYZE === '1';           // beliebige Links öffentlich prüfen (Standard: aus)
+const PUBLIC_ANALYZE = process.env.PUBLIC_ANALYZE !== '0';           // beliebige Links öffentlich prüfen (Standard: an, PUBLIC_ANALYZE=0 schließt)
 const ALLOWED_IDS = new Set((process.env.ALLOWED_IDS || '1175211811818785379').split(',').map((s) => s.trim()).filter(Boolean));
 const DAILY_LIMIT = Number(process.env.PUBLIC_DAILY_LIMIT || 20);   // neue Analysen pro Tag
-const IP_LIMIT = Number(process.env.PUBLIC_IP_LIMIT || 3);          // neue Analysen pro IP und Stunde
+const IP_LIMIT = Number(process.env.PUBLIC_IP_LIMIT || 3);          // neue Analysen pro IP und Woche
+const IP_WINDOW = Number(process.env.IP_WINDOW_H || 168) * 3600e3;
 const read = (f) => { try { return fs.readFileSync(new URL(f, import.meta.url), 'utf8'); } catch { return null; } };
 const uiHtml = read('./ui.html') || '';
-const pageHtml = () => read('./public/index.html') || '<!doctype html><meta charset="utf-8"><title>Listing Health</title><p style="font:16px system-ui;padding:40px">Die Seite ist noch nicht hochgeladen (public/index.html fehlt).</p>';
+const liveJs = () => read('./live.js') || '';
+const injectLive = (h) => (h.includes('/live.js') ? h : h.replace('</body>', '<script src="/live.js"></script></body>'));
+const pageHtml = () => injectLive(read('./public/index.html') || '<!doctype html><meta charset="utf-8"><title>Listing Health</title><p style="font:16px system-ui;padding:40px">Die Seite ist noch nicht hochgeladen (public/index.html fehlt).</p>');
 
 /* ---- Hilfen ---- */
 const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
-const ipOf = (req) => String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+const ipOf = (req) => String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',').pop().trim();
 const buckets = new Map();
 function limited(key, max, windowMs) {
   const now = Date.now(), arr = (buckets.get(key) || []).filter((t) => now - t < windowMs);
@@ -57,9 +61,7 @@ async function handleLead(req, res) {
 /* ---- Foto-Check: Scrape + Foto-Analyse für die Seite ---- */
 const jobs = new Map(); // id -> { status, step, error, startedAt }
 const dayKey = () => new Date().toISOString().slice(0, 10);
-async function pipeline(id, url) {
-  const j = jobs.get(id);
-  try {
+async function steps(id, url, j) {
     j.step = 'scrape';
     const have = await local(`/cached?id=${id}&slim=1`);
     if (have.status !== 200) {
@@ -79,8 +81,49 @@ async function pipeline(id, url) {
       else await sleep(6000);
     }
     if (!done) throw new Error('Die Foto-Analyse dauert zu lange');
+}
+async function pipeline(id, url) {
+  const j = jobs.get(id);
+  try { await steps(id, url, j); j.status = 'done'; } catch (e) { j.status = 'error'; j.error = e.message; }
+}
+
+/* ---- Befund-Motor: kompletter Report für die Seite ---- */
+const reports = new Map(); // id:lang -> { at, report }
+const repFile = (k) => path.join(DATA_DIR, `report-${k.replace(':', '-')}.json`);
+function cachedReport(k) {
+  const m = reports.get(k); if (m && Date.now() - m.at < 864e5) return m.report;
+  try { const f = repFile(k), st = fs.statSync(f); if (Date.now() - st.mtimeMs < 864e5) { const r = JSON.parse(fs.readFileSync(f, 'utf8')); reports.set(k, { at: st.mtimeMs, report: r }); return r; } } catch {}
+  return null;
+}
+async function runReport(id, url, lang, j) {
+  try {
+    if (j.step !== 'report') await steps(id, url, j);
+    j.step = 'report';
+    const [full, ph] = await Promise.all([local(`/cached?id=${id}`), local(`/analyze-photos?id=${id}`)]);
+    if (full.status !== 200) throw new Error('Das Inserat konnte nicht gelesen werden');
+    const rep = await generateReport(full.json, ph.json, lang, process.env.ANTHROPIC_API_KEY || '');
+    const k = `${id}:${lang}`; reports.set(k, { at: Date.now(), report: rep });
+    try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(repFile(k), JSON.stringify(rep)); } catch {}
     j.status = 'done';
   } catch (e) { j.status = 'error'; j.error = e.message; }
+}
+async function handleReport(req, res, u) {
+  if (!API_KEY) return json(res, 503, { ok: false, error: 'Dienst nicht konfiguriert' });
+  const url = u.searchParams.get('url') || '', lang = u.searchParams.get('lang') === 'en' ? 'en' : 'de', m = url.match(/^https?:\/\/(?:www\.)?airbnb\.[a-z.]+\/rooms\/(\d{6,})/i);
+  if (!m) return json(res, 400, { ok: false, error: 'Bitte einen Airbnb-Link im Format airbnb.de/rooms/… eingeben.' });
+  const id = m[1], k = `${id}:${lang}`, ready = cachedReport(k);
+  if (ready) { const pc = await result(id); if (pc) return json(res, 200, { ok: true, status: 'done', id, report: ready, photoCheck: pc }); }
+  if (!(PUBLIC_ANALYZE || ALLOWED_IDS.has(id))) return json(res, 403, { ok: false, status: 'closed', error: 'Der Foto-Check für eigene Links ist in dieser Version noch geschlossen. Buche einen Demo-Call, dann prüfen wir dein Inserat.' });
+  let j = jobs.get(`${k}`);
+  if (j && j.status === 'error' && Date.now() - j.startedAt > 60e3) { jobs.delete(k); j = null; }
+  if (!j) {
+    const known = !!(await result(id));          // Scrape und Foto-Analyse schon vorhanden: nur der Befund fehlt, zählt nicht gegen das Limit
+    if (!known && (limited('ip:' + ipOf(req), IP_LIMIT, IP_WINDOW) || limited('day:' + dayKey(), DAILY_LIMIT, 864e5))) return json(res, 429, { ok: false, status: 'limit', error: 'Du hast diese Woche schon drei Analysen genutzt, oder heute sind alle vergeben. Buche einen Demo-Call, dann prüfen wir dein Inserat.' });
+    j = { status: 'running', step: known ? 'report' : 'scrape', startedAt: Date.now() }; jobs.set(k, j); runReport(id, `https://www.airbnb.de/rooms/${id}`, lang, j);
+  }
+  if (j.status === 'done') { const pc = await result(id), rp = cachedReport(k); if (pc && rp) return json(res, 200, { ok: true, status: 'done', id, report: rp, photoCheck: pc }); }
+  if (j.status === 'error') return json(res, 502, { ok: false, status: 'error', id, error: j.error });
+  return json(res, 202, { ok: true, status: 'running', step: j.step, id });
 }
 async function result(id) {
   const [d, a] = await Promise.all([local(`/cached?id=${id}&slim=1`), local(`/analyze-photos?id=${id}`)]);
@@ -99,7 +142,7 @@ async function handlePhotoCheck(req, res, u) {
   let j = jobs.get(id);
   if (j && j.status === 'error' && Date.now() - j.startedAt > 60e3) { jobs.delete(id); j = null; }
   if (!j) {
-    if (limited('ip:' + ipOf(req), IP_LIMIT, 3600e3) || limited('day:' + dayKey(), DAILY_LIMIT, 864e5)) return json(res, 429, { ok: false, status: 'limit', error: 'Heute sind alle Foto-Checks vergeben. Bitte morgen erneut oder buche einen Demo-Call.' });
+    if (limited('ip:' + ipOf(req), IP_LIMIT, IP_WINDOW) || limited('day:' + dayKey(), DAILY_LIMIT, 864e5)) return json(res, 429, { ok: false, status: 'limit', error: 'Du hast diese Woche schon drei Analysen genutzt, oder heute sind alle vergeben. Buche einen Demo-Call, dann prüfen wir dein Inserat.' });
     j = { status: 'running', step: 'scrape', startedAt: Date.now() }; jobs.set(id, j); pipeline(id, `https://www.airbnb.de/rooms/${id}`);
   }
   if (j.status === 'done') { const r2 = await result(id); if (r2) return json(res, 200, { ok: true, status: 'done', id, ...r2 }); }
@@ -118,6 +161,8 @@ http.createServer = (...args) => {
       if (req.method === 'GET' && (p === '/' || p === '/index.html')) { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' }); return res.end(pageHtml()); }
       if (req.method === 'POST' && p === '/api/lead') return await handleLead(req, res);
       if (req.method === 'GET' && p === '/api/photo-check') return await handlePhotoCheck(req, res, u);
+      if (req.method === 'GET' && p === '/api/report') return await handleReport(req, res, u);
+      if (req.method === 'GET' && p === '/live.js') { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' }); return res.end(liveJs()); }
     } catch (e) { return json(res, 500, { ok: false, error: 'Interner Fehler' }); }
     return handler(req, res);
   });
