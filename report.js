@@ -54,10 +54,26 @@ export function buildPrompt(facts, lang) {
   return `Du bist ein erfahrener Revenue-Manager für Kurzzeitvermietung und prüfst ein Airbnb-Inserat. Erstelle aus den DATEN einen Listing-Health-Befund.\n\nREGELN\n- Nutze NUR Fakten aus den DATEN. Erfinde nichts: keine Umsätze, keine Marktdaten, keine Konkurrenz, keine Zahlen, die nicht in den Daten stehen. Unbekanntes weglassen oder in [Klammern] markieren.\n- Sprache aller Texte: ${L}. Ton: direkt, konkret, ohne Floskeln.\n- base-Werte: 90+ exzellent, 70-89 solide, 50-69 deutliche Lücken, unter 50 schwach. Begründe jeden Wert mit Belegen in evidence.\n- photos: stütze dich auf photoAnalysis. reviews: stütze dich auf Bewertungen, Kategorien und Zeitverlauf.\n- Titel: max. 50 Zeichen, nennt Gästezahl oder Ausstattung und die echte Lage. Keine falschen Ortsangaben.\n- gain pro Bereich so wählen, dass base plus alle gain eines Bereichs höchstens 98 ergibt.\n- ota=true nur für Änderungen im Inserat (Titel, Text, Fotos, Ausstattung, Regeln). tag=elev8 für Automatisierungen wie Bewertungsbitte oder Check-in-Nachricht.\n\nANTWORT: ausschließlich gültiges JSON in dieser Form (Kommentare nicht ausgeben):\n${SCHEMA}\n\nDATEN:\n${JSON.stringify(facts)}`;
 }
 
+export function salvageJson(text) {
+  const t = String(text || '').replace(/^\s*```(?:json)?\s*/, '').replace(/\s*```\s*$/, '').trim();
+  try { return JSON.parse(t); } catch { }
+  let depth = 0, inStr = false, esc = false, lastGood = -1;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+    if (c === '"') { inStr = true; continue; }
+    if (c === '{' || c === '[') depth++;
+    else if (c === '}' || c === ']') depth--;
+    else if (c === ',' && depth === 1) lastGood = i;
+  }
+  if (lastGood < 0) return null;
+  try { return JSON.parse(t.slice(0, lastGood) + '}'); } catch { return null; }
+}
+
 function parseJson(text) {
   const t = String(text || '').replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
   try { return JSON.parse(t); } catch { const m = t.match(/\{[\s\S]*\}/); if (m) { try { return JSON.parse(m[0]); } catch { } } }
-  return null;
+  return salvageJson(text);
 }
 
 export function normalize(raw, d, photoRes, lang) {
@@ -102,7 +118,7 @@ export async function generateReport(d, photoRes, lang, apiKey) {
   const facts = prepare(d, photoRes);
   const r = await fetch(`${BASE}/v1/messages`, {
     method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: MODEL, max_tokens: 7000, messages: [{ role: 'user', content: buildPrompt(facts, lang) }] }), signal: AbortSignal.timeout(150000),
+    body: JSON.stringify({ model: MODEL, max_tokens: 14000, messages: [{ role: 'user', content: buildPrompt(facts, lang) }] }), signal: AbortSignal.timeout(150000),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(`Anthropic ${r.status}: ${(j.error && j.error.message) || 'Fehler'}`), { status: 502 });

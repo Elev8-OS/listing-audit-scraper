@@ -94,11 +94,12 @@ async function doScrape(id){
   }
   throw new Error('Scrape dauert zu lange. Später „Status“ drücken.');
 }
-async function doPhotos(id){
+async function doPhotos(id,force){
   step('s2','run');msg('Foto-Analyse läuft … (bis zu 2 Minuten)');
+  let first=true,retried=!!force;
   for(let i=0;i<80;i++){
-    const r=await api('/analyze-photos?id='+id+'&async=1');
-    if(r.status===200){step('s2','ok');return r.json}
+    const r=await api('/analyze-photos?id='+id+'&async=1'+(first&&force?'&refresh=1':''));first=false;
+    if(r.status===200){if(r.json&&(r.json.analysis||r.json.raw&&retried)){step('s2','ok');return r.json}if(!retried){retried=true;first=true;force=true;continue}throw new Error('Die KI-Antwort war unvollständig. Bitte „Nur Foto-Analyse“ erneut starten.')}
     if(r.status>=400)throw new Error((r.json&&r.json.error)||('Fehler '+r.status));
     if(r.json&&r.json.lastError)throw new Error('Foto-Analyse fehlgeschlagen: '+(typeof r.json.lastError==='string'?r.json.lastError:JSON.stringify(r.json.lastError)));
     await sleep(6000);
@@ -111,7 +112,7 @@ async function run(kind){
   try{
     const id=idOf();['s1','s2','s3'].forEach(s=>step(s,''));msg('');
     if(kind!=='photos')await doScrape(id);
-    if(kind!=='scrape')await doPhotos(id);
+    if(kind!=='scrape')await doPhotos(id,kind==='photos');
     if(kind==='all')ready();else msg('Schritt fertig.','ok')
   }catch(e){['s1','s2'].forEach(s=>{if($('#'+s).className==='run')step(s,'err')});msg(e.message,'err')}
   busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);
