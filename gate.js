@@ -40,7 +40,8 @@
 .lockcard{margin:12px 0;border:1.5px dashed var(--ink3,#85857F);border-radius:16px;padding:16px 18px;display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap;cursor:pointer}
 html:not(.gated) .lockcard{display:none}
 html.gated #planList>:nth-child(n+4){display:none!important}
-html.gated #planList .body,html.gated #planList .btn,html.gated #filters,html.gated #dlPlan,html.gated #dlPlan2{display:none!important}
+html.gated #planList .body,html.gated #planList [data-copy],html.gated #filters,html.gated #dlPlan,html.gated #dlPlan2{display:none!important}
+html.gated #drawer .copybox{display:none!important}
 html.gated #compView>*,html.gated #liveFoto #lgrid,html.gated #market .kpis,html.gated #market .ladder,html.gated #market table,html.gated #gapList>:nth-child(n+2),html.gated #descView[data-after="1"] .desc{filter:blur(7px);pointer-events:none;user-select:none}
 html.gated #liveFoto [data-applysuggest],html.gated #liveFoto [data-applyforce]{display:none!important}
 html.gated #compView,html.gated #market,html.gated #gapList,html.gated #liveFoto,html.gated #descView[data-after="1"]{position:relative;cursor:pointer}
@@ -73,7 +74,7 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
     g.innerHTML = `<div><h2>${L('Dein Plan ist fertig. Wohin sollen wir ihn schicken?', 'Your plan is ready. Where should we send it?')}</h2>
       ${pot ? `<p class="money">${L('Dein Inserat lässt geschätzt', 'Your listing leaves an estimated')} ${cur} <i>${String(pot).replace(/\d/g, '8').replace(/\B(?=(\d{3})+(?!\d))/g, '’')}</i> ${L('pro Jahr liegen.', 'a year on the table.')}</p>` : ''}
       <p>${L('Du siehst oben, was auffällt. Im Report steht, was du dagegen tust:', 'Above you see what stands out. The report shows what to do about it:')}</p>
-      <ul><li>${L(`Alle ${n} Maßnahmen mit fertigen Texten`, `All ${n} actions with ready-made copy`)}</li><li>${L('Neuer Titel und neue Beschreibung', 'New title and description')}</li><li>${L('Foto-Reihenfolge und Ersetzen-Liste', 'Photo order and replace list')}</li><li>${L('Marktvergleich mit den drei Besten im Umkreis', 'Market comparison with the three best nearby')}</li><li>${L('Alles als PDF per E-Mail', 'All of it as a PDF by email')}</li></ul></div>
+      <ul><li>${L(`Alle ${n} Maßnahmen mit fertigen Texten`, `All ${n} actions with ready-made copy`)}</li><li>${L('Neuer Titel und neue Beschreibung', 'New title and description')}</li><li>${L('Foto-Reihenfolge und Ersetzen-Liste', 'Photo order and replace list')}</li><li>${L('Marktvergleich mit den drei Besten im Umkreis', 'Market comparison with the three best nearby')}</li><li>${L('Ein Klick an alle Kanäle: mit der Elev8 Suite', 'One click to all channels: with Elev8 Suite')}</li><li>${L('Alles als PDF per E-Mail', 'All of it as a PDF by email')}</li></ul></div>
       <form id="gateForm" novalidate><input id="gMail" type="email" autocomplete="email" inputmode="email" placeholder="${L('Deine E-Mail-Adresse', 'Your email address')}" aria-label="${L('E-Mail-Adresse', 'Email address')}"><label class="gcons"><input id="gConsent" type="checkbox"><span>${L('Ich möchte den Report per E-Mail erhalten und bin einverstanden, dass Elev8 mich dazu kontaktiert.', 'I want to receive the report by email and agree that Elev8 contacts me about it.')}</span></label><button class="btn primary" type="submit" id="gBtn">${L('Report freischalten', 'Unlock report')}</button><div class="err" id="gErr" role="alert"></div></form>`;
     try { const m = sessionStorage.getItem('lh_mail'); if (m) document.getElementById('gMail').value = m; } catch (x) { }
     if (!G.viewed) { G.viewed = true; ev('gate_view', { score: Math.round(overall()) }); }
@@ -86,13 +87,26 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
       c.innerHTML = `<b>${L(`+${rest} weitere Maßnahmen und alle Details mit „So geht’s“ und fertigen Texten`, `+${rest} more actions and all details with “how” and ready-made copy`)}</b><button class="btn sm primary" type="button">${labels()}</button>`;
     } else if (c) c.remove();
   }
-  /* Hinweis „An OTAs senden“ am Ende des Plans, und eine einzige mobile Leiste */
+  /* Hinweis „An OTAs senden“ oben im Plan (immer sichtbar), Elev8-Suite-Label an allen OTA-Knoepfen, und eine einzige mobile Leiste */
   function otaPanel() {
     const sec = document.getElementById('plan'); if (!sec) return; let p = document.getElementById('otaInfo');
-    if (!p) { p = document.createElement('div'); p.id = 'otaInfo'; p.className = 'panel'; p.style.marginTop = '16px'; sec.appendChild(p); }
+    if (!p) { p = document.createElement('div'); p.id = 'otaInfo'; p.className = 'panel e8usp'; const h = sec.querySelector('header'); if (h) h.insertAdjacentElement('afterend', p); else sec.appendChild(p); }
     const k = state.lang; if (p.dataset.k === k) return; p.dataset.k = k;
-    p.innerHTML = `<b>${L('An OTAs senden', 'Send to OTAs')}</b><p class="sub" style="margin:6px 0 12px">${L('Ohne Anbindung kopierst du die Texte und fügst sie selbst ein. Mit Elev8 verbunden geht das automatisch: Elev8 schreibt Titel, Beschreibung, Foto-Reihenfolge, Ausstattung und Regeln in alle verbundenen Kanäle, soweit der Kanal es unterstützt.', 'Without a connection you copy the texts and paste them yourself. Connected to Elev8 it happens automatically: Elev8 writes title, description, photo order, amenities and rules to all connected channels, as far as the channel supports it.')}</p>`;
+    p.innerHTML = `<div class="h"><i class="e8lbl">Elev8 Suite</i><b>${L('An OTAs senden: ein Klick, alle Kan\u00e4le', 'Send to OTAs: one click, all channels')}</b></div><p class="sub">${L('Ohne Anbindung kopierst du die Texte und f\u00fcgst sie selbst ein. Mit der Elev8 Suite geht das automatisch: Elev8 schreibt Titel, Beschreibung, Foto-Reihenfolge, Ausstattung und Regeln in alle verbundenen Kan\u00e4le, soweit der Kanal es unterst\u00fctzt.', 'Without a connection you copy the texts and paste them yourself. With Elev8 Suite it happens automatically: Elev8 writes title, description, photo order, amenities and rules to all connected channels, as far as the channel supports it.')}</p><a class="btn primary sm" data-book href="#">${L('Demo-Call buchen', 'Book a demo call')}</a>`;
+    try { bindBook(); } catch (x) { }
   }
+  function e8Labels() {
+    document.querySelectorAll('#planList .act').forEach((a) => {   // in jeder Massnahme immer sichtbar, auch wenn sie zugeklappt ist
+      const ap = a.querySelector('.body [data-open^="apply"]'), meta = a.querySelector('.meta'); if (!ap || !meta || meta.querySelector('.e8chip')) return;
+      meta.insertAdjacentHTML('beforeend', `<button type="button" class="chip y e8chip e8btn" data-open="${ap.getAttribute('data-open')}">${L('An OTAs senden', 'Send to OTAs')}<i class="e8lbl">Elev8 Suite</i></button>`);
+    });
+    const tip = L('Mit der Elev8 Suite wird das m\u00f6glich: ein Klick, und deine \u00c4nderungen gehen an alle verbundenen Kan\u00e4le.', 'Possible with Elev8 Suite: one click sends your changes to all connected channels.');
+    document.querySelectorAll('[data-open^="apply"],[data-open="src:elev8"]').forEach((b) => {
+      if (!b.classList.contains('e8btn')) { b.classList.add('e8btn'); b.insertAdjacentHTML('beforeend', '<i class="e8lbl">Elev8 Suite</i>'); }
+      if (b.classList.contains('e8chip')) { if (b.title !== tip) b.title = tip; } else if (b.dataset.tip !== tip) b.dataset.tip = tip;
+    });
+  }
+  let e8t = 0; new MutationObserver(() => { if (e8t) return; e8t = requestAnimationFrame(() => { e8t = 0; e8Labels(); }); }).observe(document.body, { childList: true, subtree: true });
   function mobileBar() {
     const m = document.getElementById('mbar'); if (!m) return; const key = (gated() ? 'g' : 'b') + state.lang; if (m.dataset.k === key) return; m.dataset.k = key;
     m.innerHTML = gated() ? `<button class="btn primary" type="button" id="mbGate">${L('Report freischalten', 'Unlock report')}</button>` : `<a class="btn primary" data-book href="#">${L('Demo-Call buchen', 'Book a demo call')}</a>`;
@@ -103,7 +117,7 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
     const on = gated(); document.documentElement.classList.toggle('gated', on);
     for (const s of Object.keys(zones)) { const e = document.querySelector(s); if (e) { if (on) e.setAttribute('data-lk', labels()); else e.removeAttribute('data-lk'); } }
     const dv = document.getElementById('descView'); if (dv) { if (on && state.descSel === 'after') dv.setAttribute('data-after', '1'); else dv.removeAttribute('data-after'); }
-    lockCards(); otaPanel(); mobileBar(); if (on) renderGate();
+    lockCards(); otaPanel(); e8Labels(); mobileBar(); if (on) renderGate();
     else { const g = document.getElementById('gate'); if (g && !G.unlocked) g.remove(); }
   }
   function toGate(z) { const g = document.getElementById('gate'); ev('gate_locked_click', { zone: z || '?' }); if (g) g.scrollIntoView({ behavior: 'smooth', block: 'center' }); const i = document.getElementById('gMail'); if (i) setTimeout(() => i.focus({ preventScroll: true }), 450); }
@@ -112,6 +126,7 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
   document.addEventListener('click', (e) => {
     if (!gated()) return; const t = e.target; if (!t.closest) return;
     if (t.closest('#gate')) return;
+    if (t.closest('[data-open^="apply"],[data-open="src:elev8"]')) return;   // der OTA-Versand mit Elev8 Suite ist immer erreichbar
     const locked = t.closest('#planLock') ? 'plan' : t.closest('#planList .act,#planList [data-tog],#planList [data-open],#planList [data-copy]') ? 'plan' : t.closest('#dlPlan,#dlPlan2') ? 'plan' : t.closest('#titleTabs button.lk') ? 'titel' : t.closest('#descTabs button[data-desc="after"]') ? 'text' : t.closest('[data-open^="apply"],[data-copytitle],[data-copydesc],[data-applygo],[data-applysuggest]') ? 'ota' : t.closest('#compView,#market .kpis,#market .ladder,#market table') ? 'markt' : t.closest('#gapList') ? 'luecke' : t.closest('#liveFoto') ? 'fotos' : null;
     if (!locked) return; e.preventDefault(); e.stopPropagation(); toGate(locked);
   }, true);
