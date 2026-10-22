@@ -17,6 +17,18 @@ const SWAPS = [
   ['Exclusive Elev8 data: bookings, prices and market in one report.', 'Listing, photos, prices and market in one report.'],
   ['Hake ab, was du erledigt hast. Der Score rechnet live mit. Änderungen am Inserat übernimmt Elev8 mit einem Klick in alle verbundenen OTAs.', 'Hake ab, was du erledigt hast. Der Score rechnet live mit. Mit der Elev8 Suite gehen Änderungen am Inserat mit einem Klick an alle verbundenen OTAs.'],
   ['Tick off what you’ve done. The score updates live. Elev8 pushes listing changes to all connected OTAs with one click.', 'Tick off what you’ve done. The score updates live. With Elev8 Suite, listing changes go to all connected OTAs with one click.'],
+  // Demo-Vorschlaege: einladend und ehrlich, ohne harte Nachteile, ohne Bewertungs- oder Gaeste-Bezug
+  ['Grosse 3-Zimmer-Wohnung mitten in der Schaffhauser Altstadt, Platz für bis zu 6 Gäste.', 'Grosse 3-Zimmer-Wohnung mitten in der Schaffhauser Altstadt, Platz für bis zu 6 Gäste. Ideal für Familien und Freundesgruppen.'],
+  ['Gut zu wissen: Die Wohnung liegt im lebhaften Zentrum über einer beliebten Bar. Am Wochenende kann es abends laut sein, vor allem bei offenem Fenster. [Ohrstöpsel und Ventilator liegen bereit.]', 'Du wohnst mitten im lebhaften Zentrum: Altstadt und Bahnhof sind bequem zu Fuss erreichbar. Wir freuen uns auf deinen Besuch in Schaffhausen.'],
+  ['Verkauft Platz und Lage, genau wie deine Gäste es beschreiben. Unsere Empfehlung.', 'Verkauft Platz und Lage in einem Satz. Unsere Empfehlung.'],
+  ['Sells space and location, just as your guests describe it. Our recommendation.', 'Sells space and location in one line. Our recommendation.'],
+  ['Ehrlicher Lärmhinweis', 'Einladend geschrieben'], ['Honest noise note', 'Warmly written'],
+  ['Konkrete Ausstattung statt Werbesprache. Der Lärmhinweis verhindert schlechte Bewertungen, bevor sie entstehen.', 'Konkrete Ausstattung statt Werbesprache. Das Inserat wirkt klarer und einladender.'],
+  ['Concrete amenities instead of marketing language. The noise note prevents bad reviews before they happen.', 'Concrete amenities instead of marketing language. The listing feels clearer and more inviting.'],
+  ['Text aus dem Studio übernehmen. Ohrstöpsel und Ventilator nur nennen, wenn sie wirklich bereitliegen.', 'Text aus dem Studio übernehmen und Check-in-Zeit sowie Ausstattung kurz prüfen.'],
+  ['Take the text from the studio. Only mention earplugs and fan if they are actually there.', 'Take the text from the studio and quickly check check-in time and amenities.'],
+  ['Die Klammer am Ende nur übernehmen, wenn Ohrstöpsel und Ventilator wirklich bereitliegen.', 'Prüfe Check-in-Zeit und Ausstattung, bevor du den Text übernimmst.'],
+  ['Only keep the bracket at the end if earplugs and fan are actually there.', 'Check check-in time and amenities before you apply the text.'],
 ];
 const CSS = `
 /* Lead-Magnet-Modus */
