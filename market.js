@@ -13,7 +13,7 @@ const dist = (arr) => ({ p25: qt(arr, .25), p50: qt(arr, .5), p75: qt(arr, .75),
 const rankOf = (arr, v) => { const a = arr.filter(Number.isFinite); return a.length && Number.isFinite(v) ? Math.round(a.filter((x) => x < v).length / a.length * 100) : null; };
 const card = (x) => {
   const m = pm(x), b = x.booking_settings || {}, r = x.ratings || {}, d = x.property_details || {};
-  return { rev: m.ttm_revenue ?? null, adr: m.ttm_avg_rate ?? null, occ: m.ttm_occupancy ?? null, minNights: b.min_nights ?? null, policy: b.cancellation_policy || null, cleaning: (x.pricing_info || {}).cleaning_fee ?? null, gf: !!(x.listing_info || {}).guest_favorite, superhost: !!(x.host_info || {}).superhost, rating: r.rating_overall ?? null, reviews: r.num_reviews ?? null, guests: d.guests ?? null, bedrooms: d.bedrooms ?? null, amenities: (d.amenities || []).length };
+  return { name: (x.listing_info || {}).listing_name || null, rev: m.ttm_revenue ?? null, adr: m.ttm_avg_rate ?? null, occ: m.ttm_occupancy ?? null, minNights: b.min_nights ?? null, policy: b.cancellation_policy || null, cleaning: (x.pricing_info || {}).cleaning_fee ?? null, gf: !!(x.listing_info || {}).guest_favorite, superhost: !!(x.host_info || {}).superhost, rating: r.rating_overall ?? null, reviews: r.num_reviews ?? null, guests: d.guests ?? null, bedrooms: d.bedrooms ?? null, amenities: (d.amenities || []).length };
 };
 export async function marketFor(id) {
   if (!KEY) return null;
@@ -21,7 +21,8 @@ export async function marketFor(id) {
   if (!Number.isFinite(loc.latitude) || !pd.guests) return null;
   const cj = await get('/listings/comparables', { latitude: loc.latitude, longitude: loc.longitude, bedrooms: pd.bedrooms ?? 1, baths: pd.baths ?? 1, guests: pd.guests, currency: 'native' });
   const myId = Number((me.listing_info || {}).listing_id);
-  const comps = ((cj && cj.listings) || []).filter((c) => Number((c.listing_info || {}).listing_id) !== myId && pm(c).ttm_revenue != null);
+  const myHost = (me.host_info || {}).host_id;   // eigene weitere Inserate gehoeren nicht zur Konkurrenz
+  const comps = ((cj && cj.listings) || []).filter((c) => Number((c.listing_info || {}).listing_id) !== myId && !(myHost && (c.host_info || {}).host_id === myHost) && pm(c).ttm_revenue != null);
   if (comps.length < 5) return null;
   const mine = card(me), C = comps.map(card), col = (k) => C.map((c) => c[k]), byRev = C.slice().sort((a, b) => b.rev - a.rev), top10 = byRev.slice(0, 10), m = pm(me);
   const p75 = dist(col('occ')).p75, pot = mine.occ != null && mine.adr != null && p75 != null && p75 > mine.occ ? Math.round((p75 - mine.occ) * 365 * mine.adr / 100) * 100 : null;
