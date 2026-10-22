@@ -140,6 +140,7 @@ async function runReport(id, url, lang, j) {
     j.step = 'report';
     const [full, pc, mk] = await Promise.all([local(`/cached?id=${id}`), result(id), marketFor(id).catch((e) => { console.error('MARKT', id, e.message); return null; })]);
     if (full.status !== 200) throw new Error('Das Inserat konnte nicht gelesen werden');
+    if (full.json && full.json.ratings && typeof full.json.ratings.overall === 'object') full.json.ratings = { ...full.json.ratings, overall: avgOf(full.json) };   // Gesamtnote als Zahl
     const rep = await generateReportV2(full.json, pc ? { analysis: pc.analysis } : null, lang, process.env.ANTHROPIC_API_KEY || '');
     rep.market = mk || null;
     const k = `${id}:${lang}`; reports.set(k, { at: Date.now(), report: rep });
@@ -163,7 +164,17 @@ async function handleReport(req, res, u) {
   }
   if (j.status === 'done') { const pc = await result(id), rp = cachedReport(k); if (pc && rp) return json(res, 200, { ok: true, status: 'done', id, report: rp, photoCheck: pc }); }
   if (j.status === 'error') return json(res, 502, { ok: false, status: 'error', id, error: j.error });
-  return json(res, 202, { ok: true, status: 'running', step: j.step, id });
+  return json(res, 202, { ok: true, status: 'running', step: j.step, id, preview: await preview(id) });
+}
+const avgOf = (x) => { const o = x && x.ratings && x.ratings.overall, v = o && typeof o === 'object' ? o.ratingAverage : (o ?? (x && x.rating && typeof x.rating === 'object' ? x.rating.ratingAverage : x && x.rating)); return v !== null && v !== undefined && Number.isFinite(Number(v)) ? Number(v) : null; };
+async function preview(id) {
+  try {
+    const [d, a] = await Promise.all([local(`/cached?id=${id}&slim=1`), local(`/analyze-photos?id=${id}`)]), p = {};
+    if (d.status === 200 && d.json) { const x = d.json; p.title = x.title || null; p.rating = avgOf(x); p.reviews = x.reviewCount ?? (x.reviews || []).length; p.photos = (x.photos || []).length; p.amenities = (x.amenities || []).filter((z) => z.available).length; p.descChars = String(x.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().length; }
+    const an = a.status === 200 ? getAnalysis(a.json) : null;
+    if (an) { const ok = an.photos.filter((z) => [z.brightness, z.sharpness, z.composition, z.tidiness].every(Number.isFinite)); if (ok.length) p.photoScore = Math.round(ok.reduce((t, z) => t + q4(z), 0) / ok.length * 20); p.weakPhotos = an.photos.filter((z) => z.keep === false).length; }
+    return p;
+  } catch { return {}; }
 }
 async function result(id) {
   const [d, a] = await Promise.all([local(`/cached?id=${id}&slim=1`), local(`/analyze-photos?id=${id}`)]);
