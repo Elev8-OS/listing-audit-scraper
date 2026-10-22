@@ -38,6 +38,10 @@ async function until(prompt, ok, key, hint) {
 }
 const fit = (s) => { s = String(s || '').trim(); if (len(s) <= 50) return s; const c = [...s].slice(0, 50).join(''), i = c.lastIndexOf(' '); return (i > 25 ? c.slice(0, i) : c).replace(/[\s·,–-]+$/, ''); };
 
+function photoScore(photoRes) {
+  const a = photoRes && photoRes.analysis, ok = a && Array.isArray(a.photos) ? a.photos.filter((p) => [p.brightness, p.sharpness, p.composition, p.tidiness].every(Number.isFinite)) : [];
+  return ok.length ? Math.round(ok.reduce((t, p) => t + (p.brightness + p.sharpness + p.composition + p.tidiness) / 4, 0) / ok.length * 20) : null;
+}
 function buildVis(f, photoRes, L) {
   const en = L === 'en', n = (x) => String(x).replace('.', en ? '.' : ','), v = [], add = (l, k, s) => v.push([l, k, s]);
   const gf = f.ratings && f.ratings.guestFavorite; add('Guest Favorite', gf ? 'good' : 'warn', gf ? (en ? 'Yes' : 'Ja') : (en ? 'No' : 'Nein'));
@@ -46,12 +50,14 @@ function buildVis(f, photoRes, L) {
   const d = f.daysSinceLastReview; if (d != null) add(en ? 'Latest review' : 'Letzte Bewertung', d <= 30 ? 'good' : d <= 90 ? 'warn' : 'bad', en ? `${d} days ago` : `vor ${d} Tagen`);
   const am = (f.amenitiesAvailable || []).length; add(en ? 'Amenities' : 'Ausstattungen', am >= 45 ? 'good' : am >= 30 ? 'warn' : 'bad', String(am));
   add(en ? 'Photos' : 'Fotos', f.photoCount >= 25 ? 'good' : f.photoCount >= 15 ? 'warn' : 'bad', String(f.photoCount));
-  const ps = photoRes && photoRes.analysis && photoRes.analysis.overall && photoRes.analysis.overall.score; if (Number.isFinite(ps)) add(en ? 'Photo grade' : 'Foto-Note', ps >= 80 ? 'good' : ps >= 60 ? 'warn' : 'bad', `${ps}/100`);
+  const ps = photoScore(photoRes); if (ps != null) add(en ? 'Photo grade' : 'Foto-Note', ps >= 80 ? 'good' : ps >= 60 ? 'warn' : 'bad', `${ps}/100`);
   return v;
 }
 
 export async function generateReportV2(d, photoRes, lang, key) {
   if (!key) throw Object.assign(new Error('ANTHROPIC_API_KEY fehlt'), { status: 503 });
+  const ps = photoScore(photoRes);
+  if (ps != null) photoRes = { ...photoRes, analysis: { ...photoRes.analysis, overall: { ...(photoRes.analysis.overall || {}), score: ps } } };   // gleiche Foto-Note wie auf der Seite: Durchschnitt der Einzelwerte
   const L = lang === 'en' ? 'en' : 'de', f = prepare(d, photoRes), fB = { ...f, reviews: (f.reviews || []).slice(0, 15) };
   const [A, B] = await Promise.all([until(promptA(f, L), okA, key, 'Bereiche oder Maßnahmen fehlen'), until(promptB(fB, L), okB, key, 'Titel länger als 50 Zeichen oder Beschreibung fehlt')]);
   if (!okA(A)) throw new Error('Die Analyse war unvollständig');
