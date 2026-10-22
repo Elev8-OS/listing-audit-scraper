@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Headless-Browser-Service (Playwright) für öffentliche Airbnb-Listings → JSON",
-  "scripts": { "start": "node server.js" },
+  "scripts": { "start": "node start.js" },
   "engines": { "node": ">=20" },
   "dependencies": { "playwright": "1.49.1" }
 }

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Listing-Audit-Konsole · Elev8</title>
+<style>
+:root{--ink:#0A0A0A;--bg:#fff;--mist:#F6F6F3;--line:#E6E6E1;--y:#F6BB12;--good:#14803F;--bad:#B3261E;--mute:#6b6b66}
+@media(prefers-color-scheme:dark){:root{--ink:#F5F5F2;--bg:#0B0B0C;--mist:#151516;--line:#2B2B2E;--good:#4CC38A;--bad:#FF8A80;--mute:#9a9a94}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:760px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:clamp(1.8rem,5vw,2.6rem);letter-spacing:-.035em;line-height:1.05;margin:0 0 8px;font-weight:800}
+p.s{color:var(--mute);margin:0 0 24px}
+.card{background:var(--mist);border:1px solid var(--line);border-radius:18px;padding:20px;margin-bottom:16px}
+label{display:block;font-weight:600;font-size:.875rem;margin:0 0 6px}
+input{width:100%;min-height:46px;border:1.5px solid var(--line);border-radius:12px;padding:0 14px;background:var(--bg);color:var(--ink);font:inherit;margin-bottom:14px}
+input:focus{outline:none;border-color:var(--ink);box-shadow:0 0 0 4px rgba(246,187,18,.3)}
+.row{display:flex;flex-wrap:wrap;gap:10px}
+button{min-height:44px;padding:0 20px;border-radius:999px;border:1.5px solid var(--ink);background:transparent;color:var(--ink);font:inherit;font-weight:650;cursor:pointer}
+button.p{background:var(--y);border-color:var(--y);color:#0A0A0A}
+button:disabled{opacity:.45;cursor:not-allowed}
+ol{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+li{display:flex;gap:12px;align-items:center}
+.dot{width:22px;height:22px;border-radius:50%;border:2px solid var(--line);flex:none;display:grid;place-items:center;font-size:.7rem}
+li.run .dot{border-color:var(--y);border-top-color:transparent;animation:sp .8s linear infinite}
+li.ok .dot{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+li.err .dot{border-color:var(--bad);color:var(--bad)}
+li.run,li.ok{color:var(--ink)}li{color:var(--mute)}
+@keyframes sp{to{transform:rotate(360deg)}}
+#msg{min-height:1.4em;font-size:.92rem}#msg.err{color:var(--bad)}#msg.ok{color:var(--good)}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px;overflow:auto;max-height:280px;font-size:.8rem;margin:10px 0 0}
+small{color:var(--mute)}
+</style>
+</head>
+<body>
+<main>
+<h1>Listing-Audit-Konsole</h1>
+<p class="s">Scrape und Foto-Analyse per Knopf. Dein Schlüssel bleibt in diesem Browser-Tab und geht nur an diesen Server.</p>
+<div class="card">
+  <label for="key">API-Schlüssel</label>
+  <input id="key" type="password" autocomplete="off" placeholder="Dein API_KEY aus Railway">
+  <label for="url">Airbnb-Link</label>
+  <input id="url" type="url" value="https://www.airbnb.de/rooms/1175211811818785379">
+  <div class="row">
+    <button class="p" id="all">Alles starten</button>
+    <button id="onlyScrape">Nur Scrape</button>
+    <button id="onlyPhotos">Nur Foto-Analyse</button>
+    <button id="stat">Status</button>
+  </div>
+</div>
+<div class="card">
+  <ol id="steps">
+    <li id="s1"><span class="dot"></span><span>Inserat scrapen (30 bis 60 Sekunden)</span></li>
+    <li id="s2"><span class="dot"></span><span>Fotos mit KI analysieren (1 bis 2 Minuten)</span></li>
+    <li id="s3"><span class="dot"></span><span>Ergebnis bereit</span></li>
+  </ol>
+  <p id="msg" role="status"></p>
+</div>
+<div class="card">
+  <div class="row">
+    <button id="dl1">Scrape-Ergebnis herunterladen</button>
+    <button id="dl2">Foto-Analyse herunterladen</button>
+  </div>
+  <small>Lade die Dateien hier im Chat hoch, dann arbeite ich sie in den Report ein. Sie enthalten keinen Schlüssel.</small>
+  <pre id="peek" hidden></pre>
+</div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+const KEY=$('#key');KEY.value=sessionStorage.getItem('k')||'';KEY.addEventListener('input',()=>sessionStorage.setItem('k',KEY.value));
+let busy=false;
+const msg=(t,c)=>{const m=$('#msg');m.textContent=t||'';m.className=c||''};
+const step=(id,st)=>{$('#'+id).className=st;$('#'+id+' .dot').textContent=st==='ok'?'✓':st==='err'?'!':''};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const idOf=()=>{const m=$('#url').value.match(/(\d{6,})/);if(!m)throw new Error('Im Link fehlt die Listing-Nummer.');return m[1]};
+async function api(path){
+  if(!KEY.value.trim())throw new Error('Bitte den API-Schlüssel eintragen.');
+  const r=await fetch(path,{headers:{authorization:'Bearer '+KEY.value.trim()}});
+  let j=null;try{j=await r.json()}catch(e){}
+  if(r.status===401)throw new Error('Schlüssel falsch (401).');
+  return{status:r.status,json:j};
+}
+async function doScrape(id){
+  step('s1','run');msg('Scrape läuft …');
+  const url=encodeURIComponent($('#url').value.trim());
+  const first=await api('/scrape?async=1&slim=1&url='+url);
+  if(first.status>=400)throw new Error((first.json&&first.json.error)||('Fehler '+first.status));
+  for(let i=0;i<60;i++){
+    const c=await api('/cached?id='+id+'&slim=1');
+    if(c.status===200){step('s1','ok');return c.json}
+    if(c.status===404){const le=c.json&&c.json.lastError;if(le)throw new Error('Scrape fehlgeschlagen: '+(le.message||JSON.stringify(le)));}
+    await sleep(5000);
+  }
+  throw new Error('Scrape dauert zu lange. Später „Status“ drücken.');
+}
+async function doPhotos(id){
+  step('s2','run');msg('Foto-Analyse läuft … (bis zu 2 Minuten)');
+  for(let i=0;i<80;i++){
+    const r=await api('/analyze-photos?id='+id+'&async=1');
+    if(r.status===200){step('s2','ok');return r.json}
+    if(r.status>=400)throw new Error((r.json&&r.json.error)||('Fehler '+r.status));
+    if(r.json&&r.json.lastError)throw new Error('Foto-Analyse fehlgeschlagen: '+(typeof r.json.lastError==='string'?r.json.lastError:JSON.stringify(r.json.lastError)));
+    await sleep(6000);
+  }
+  throw new Error('Foto-Analyse dauert zu lange. Später „Status“ drücken.');
+}
+function ready(){step('s3','ok');msg('Fertig. Lade die zwei Dateien herunter.','ok')}
+async function run(kind){
+  if(busy)return;busy=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);
+  try{
+    const id=idOf();['s1','s2','s3'].forEach(s=>step(s,''));msg('');
+    if(kind!=='photos')await doScrape(id);
+    if(kind!=='scrape')await doPhotos(id);
+    if(kind==='all')ready();else msg('Schritt fertig.','ok')
+  }catch(e){['s1','s2'].forEach(s=>{if($('#'+s).className==='run')step(s,'err')});msg(e.message,'err')}
+  busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);
+}
+async function download(path,name,btn){
+  try{const r=await api(path);if(r.status!==200)throw new Error((r.json&&r.json.error)||('Noch nicht bereit ('+r.status+').'));
+    const t=JSON.stringify(r.json,null,2),a=document.createElement('a');a.href=URL.createObjectURL(new Blob([t],{type:'application/json'}));a.download=name;a.click();
+    const p=$('#peek');p.hidden=false;p.textContent=t.slice(0,1500)+(t.length>1500?'\n…':'');msg(name+' heruntergeladen.','ok');
+  }catch(e){msg(e.message,'err')}
+}
+$('#all').onclick=()=>run('all');$('#onlyScrape').onclick=()=>run('scrape');$('#onlyPhotos').onclick=()=>run('photos');
+$('#stat').onclick=async()=>{try{const r=await api('/cache');const it=(r.json&&r.json.items)||[];msg(it.length?it.map(i=>i.id+': '+(i.title||'')+' · Scrape vor '+Math.round(i.ageSec/60)+' Min'+(i.photoAnalysis?' · Foto-Analyse vorhanden':'')).join('\n'):'Noch nichts gespeichert.'+((r.json&&r.json.running&&r.json.running.length)?' Läuft gerade: '+r.json.running.join(', '):''),'ok')}catch(e){msg(e.message,'err')}};
+$('#dl1').onclick=()=>{try{download('/cached?id='+idOf()+'&slim=1','scrape-'+idOf()+'.json')}catch(e){msg(e.message,'err')}};
+$('#dl2').onclick=()=>{try{download('/analyze-photos?id='+idOf(),'photos-'+idOf()+'.json')}catch(e){msg(e.message,'err')}};
+</script>
+</body>
+</html>
