@@ -7,7 +7,7 @@ import { salvageJson } from './report.js';
 import { generateReportV2 } from './engine.js';
 import { marketFor } from './market.js';
 import { createLeads } from './leads.js';
-import { patchPage } from './patch.js';
+import { patchPage, patchScript } from './patch.js';
 
 // Der Scraper setzt max_tokens fest auf 8000. Mit Nachdenken wird die Foto-Antwort dann abgeschnitten.
 const realFetch = globalThis.fetch;
@@ -33,7 +33,7 @@ const IP_LIMIT = Number(process.env.PUBLIC_IP_LIMIT || 3);          // neue Anal
 const IP_WINDOW = Number(process.env.IP_WINDOW_H || 168) * 3600e3;
 const read = (f) => { try { return fs.readFileSync(new URL(f, import.meta.url), 'utf8'); } catch { return null; } };
 const uiHtml = read('./ui.html') || '';
-const liveJs = (f) => read('./' + f) || '';
+const liveJs = (f) => patchScript(read('./' + f) || '');
 const injectLive = (h) => (h.includes('/live.js') ? h : h.replace('</body>', '<script src="/live.js"></script><script src="/live2.js"></script><script src="/gate.js"></script></body>'));
 const BK_OLD = "const BOOKING_URL = 'https://elev8-suite.com';";   // Platzhalter in der Seite, wird mit BOOKING_URL aus Railway ersetzt
 const pageHtml = () => patchPage(injectLive(read('./public/index.html') || '<!doctype html><meta charset="utf-8"><title>Listing Health</title><p style="font:16px system-ui;padding:40px">Die Seite ist noch nicht hochgeladen (public/index.html fehlt).</p>').replace(BK_OLD, () => (process.env.BOOKING_URL ? `const BOOKING_URL = ${JSON.stringify(process.env.BOOKING_URL)};` : BK_OLD)));
@@ -118,7 +118,7 @@ async function pipeline(id, url) {
 
 /* ---- Befund-Motor: kompletter Report für die Seite ---- */
 const reports = new Map(); // id:lang -> { at, report }
-const repFile = (k) => path.join(DATA_DIR, `report-${k.replace(':', '-')}.json`);
+const repFile = (k) => path.join(DATA_DIR, `report-v3-${k.replace(':', '-')}.json`);
 function cachedReport(k) {
   const m = reports.get(k); if (m && Date.now() - m.at < 864e5) return m.report;
   try { const f = repFile(k), st = fs.statSync(f); if (Date.now() - st.mtimeMs < 864e5) { const r = JSON.parse(fs.readFileSync(f, 'utf8')); reports.set(k, { at: st.mtimeMs, report: r }); return r; } } catch {}
