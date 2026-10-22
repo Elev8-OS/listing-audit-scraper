@@ -29,6 +29,11 @@ const SWAPS = [
   ['Take the text from the studio. Only mention earplugs and fan if they are actually there.', 'Take the text from the studio and quickly check check-in time and amenities.'],
   ['Die Klammer am Ende nur übernehmen, wenn Ohrstöpsel und Ventilator wirklich bereitliegen.', 'Prüfe Check-in-Zeit und Ausstattung, bevor du den Text übernimmst.'],
   ['Only keep the bracket at the end if earplugs and fan are actually there.', 'Check check-in time and amenities before you apply the text.'],
+  // Wettbewerb: Namen der Vergleichsinserate zeigen
+  [' Die Namen der Inserate zeigen wir nicht.', ''], [' We don’t show the listings’ names.', ''], [' We don’t show the names of the listings.', ''],
+  ['Die drei umsatzstärksten Inserate (ohne Namen)', 'Die drei umsatzstärksten Inserate'], ['The three top-earning listings (anonymous)', 'The three top-earning listings'],
+  ['Object.assign({k:`${T("Inserat")} ${"ABC"[t]}`,sub:', 'Object.assign({k:e.name||`${T("Inserat")} ${"ABC"[t]}`,sub:'],
+  ['Object.assign({k:o("Inserat ","Listing ")+"ABC"[t]},e)', 'Object.assign({k:e.name||o("Inserat ","Listing ")+"ABC"[t]},e)'],
 ];
 const CSS = `
 /* Lead-Magnet-Modus */
