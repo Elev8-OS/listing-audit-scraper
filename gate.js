@@ -85,11 +85,24 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
       c.innerHTML = `<b>${L(`+${rest} weitere Maßnahmen und alle Details mit „So geht’s“ und fertigen Texten`, `+${rest} more actions and all details with “how” and ready-made copy`)}</b><button class="btn sm primary" type="button">${labels()}</button>`;
     } else if (c) c.remove();
   }
+  /* Hinweis „An OTAs senden“ am Ende des Plans, und eine einzige mobile Leiste */
+  function otaPanel() {
+    const sec = document.getElementById('plan'); if (!sec) return; let p = document.getElementById('otaInfo');
+    if (!p) { p = document.createElement('div'); p.id = 'otaInfo'; p.className = 'panel'; p.style.marginTop = '16px'; sec.appendChild(p); }
+    const k = state.lang; if (p.dataset.k === k) return; p.dataset.k = k;
+    p.innerHTML = `<b>${L('An OTAs senden', 'Send to OTAs')}</b><p class="sub" style="margin:6px 0 12px">${L('Ohne Anbindung kopierst du die Texte und fügst sie selbst ein. Mit Elev8 verbunden geht das automatisch: Elev8 schreibt Titel, Beschreibung, Foto-Reihenfolge, Ausstattung und Regeln in alle verbundenen Kanäle, soweit der Kanal es unterstützt.', 'Without a connection you copy the texts and paste them yourself. Connected to Elev8 it happens automatically: Elev8 writes title, description, photo order, amenities and rules to all connected channels, as far as the channel supports it.')}</p>`;
+  }
+  function mobileBar() {
+    const m = document.getElementById('mbar'); if (!m) return; const key = (gated() ? 'g' : 'b') + state.lang; if (m.dataset.k === key) return; m.dataset.k = key;
+    m.innerHTML = gated() ? `<button class="btn primary" type="button" id="mbGate">${L('Report freischalten', 'Unlock report')}</button>` : `<a class="btn primary" data-book href="#">${L('Demo-Call buchen', 'Book a demo call')}</a>`;
+    try { bindBook(); } catch (x) { }
+  }
+  document.addEventListener('click', (e) => { if (e.target.closest && e.target.closest('#mbGate')) toGate('leiste'); });
   function applyGate() {
     const on = gated(); document.documentElement.classList.toggle('gated', on);
     for (const s of Object.keys(zones)) { const e = document.querySelector(s); if (e) { if (on) e.setAttribute('data-lk', labels()); else e.removeAttribute('data-lk'); } }
     const dv = document.getElementById('descView'); if (dv) { if (on && state.descSel === 'after') dv.setAttribute('data-after', '1'); else dv.removeAttribute('data-after'); }
-    lockCards(); if (on) renderGate();
+    lockCards(); otaPanel(); mobileBar(); if (on) renderGate();
     else { const g = document.getElementById('gate'); if (g && !G.unlocked) g.remove(); }
   }
   function toGate(z) { const g = document.getElementById('gate'); ev('gate_locked_click', { zone: z || '?' }); if (g) g.scrollIntoView({ behavior: 'smooth', block: 'center' }); const i = document.getElementById('gMail'); if (i) setTimeout(() => i.focus({ preventScroll: true }), 450); }
@@ -117,7 +130,7 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
       if (!r.ok || !j.ok) throw new Error(j.error || r.status);
       G.token = j.token || null; G.unlocked = true; try { sessionStorage.setItem('lh_unlocked', '1'); } catch (x) { }
       ev('unlocked'); const g = document.getElementById('gate'); g.classList.add('done');
-      g.innerHTML = `<div><h2>${L('Freigeschaltet. Dein Report ist unterwegs.', 'Unlocked. Your report is on its way.')}</h2><p>${L(`Das PDF kommt in wenigen Minuten an ${mail}. Hier siehst du schon alles.`, `The PDF arrives at ${mail} in a few minutes. You can already see everything here.`)}</p>${G.mk && G.mk.potential ? `<p class="money">${L('Dein Inserat lässt geschätzt', 'Your listing leaves an estimated')} ${G.mk.currency || 'CHF'} ${String(G.mk.potential).replace(/\B(?=(\d{3})+(?!\d))/g, '’')} ${L('pro Jahr liegen.', 'a year on the table.')}</p><p style="font-size:.85rem">${L('Schätzung: Abstand zur Belegung des oberen Viertels der Vergleichsinserate, bei gleichem Preis pro Nacht.', 'Estimate: gap to the occupancy of the top quarter of comparable listings, at your current nightly rate.')}</p>` : ''}<div class="row2"><a class="btn primary" href="#plan">${L('Zum Plan', 'To the plan')}</a><a class="btn ghost" data-book href="#">${L('Demo-Call buchen', 'Book a demo call')}</a></div></div>`;
+      g.innerHTML = `<div><h2>${L('Freigeschaltet. Dein Report ist unterwegs.', 'Unlocked. Your report is on its way.')}</h2><p>${L(`Das PDF kommt in wenigen Minuten an ${mail}. Hier siehst du schon alles.`, `The PDF arrives at ${mail} in a few minutes. You can already see everything here.`)}</p>${G.mk && G.mk.potential ? `<p class="money">${L('Dein Inserat lässt geschätzt', 'Your listing leaves an estimated')} ${G.mk.currency || 'CHF'} ${String(G.mk.potential).replace(/\B(?=(\d{3})+(?!\d))/g, '’')} ${L('pro Jahr liegen.', 'a year on the table.')}</p><p style="font-size:.85rem">${L('Schätzung: Abstand zur Belegung des oberen Viertels der Vergleichsinserate, bei gleichem Preis pro Nacht.', 'Estimate: gap to the occupancy of the top quarter of comparable listings, at your current nightly rate.')}</p>` : ''}<div class="row2"><a class="btn primary" href="#plan">${L('Zum Plan', 'To the plan')}</a></div></div>`;
       try { bindBook(); } catch (x) { } renderAll(); applyGate();
     } catch (x) { ev('gate_error', { zone: 'server' }); btn.disabled = false; btn.textContent = L('Report freischalten', 'Unlock report'); err.textContent = L('Senden hat nicht geklappt. Bitte versuche es gleich noch einmal.', 'Sending failed. Please try again in a moment.'); }
   });
