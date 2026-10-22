@@ -1,6 +1,6 @@
 // Befund-Motor v2: zwei kleinere KI-Aufrufe (Analyse, Texte), geprüft, mit festen Sichtbarkeits-Signalen und Ausstattungs-Abgleich.
 import { prepare, normalize, salvageJson } from './report.js';
-export const PROMPT_VERSION = 'v4';   // bei jeder Aenderung der Prompts hochzaehlen: gespeicherte Reports werden dann neu erzeugt
+export const PROMPT_VERSION = 'v5';   // bei jeder Aenderung der Prompts hochzaehlen: gespeicherte Reports werden dann neu erzeugt
 const MODEL = process.env.REPORT_MODEL || process.env.PHOTO_MODEL || 'claude-sonnet-5-5';
 const BASE = process.env.ANTHROPIC_BASE || 'https://api.anthropic.com';
 const len = (s) => [...String(s || '')].length;
