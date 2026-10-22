@@ -1,4 +1,4 @@
-// Befund-Motor v2: zwei kleinere KI-Aufrufe (Analyse, Texte), geprüft, mit festen Sichtbarkeits-Signalen.
+// Befund-Motor v2: zwei kleinere KI-Aufrufe (Analyse, Texte), geprüft, mit festen Sichtbarkeits-Signalen und Ausstattungs-Abgleich.
 import { prepare, normalize, salvageJson } from './report.js';
 const MODEL = process.env.REPORT_MODEL || process.env.PHOTO_MODEL || 'claude-sonnet-5-5';
 const BASE = process.env.ANTHROPIC_BASE || 'https://api.anthropic.com';
@@ -13,14 +13,18 @@ const SA = `{
  "actions": [ {"id": "a1", "cat": "title|desc|photos|reviews|consistency", "t": "Maßnahme", "min": Minuten, "effort": "z. B. 5 Min", "impact": "Hoch|Mittel|Niedrig", "gain": 1-30, "why": "Warum", "how": "So geht's konkret", "copy": null, "ota": true|false, "tag": "elev8 oder weglassen"} ],   // 6-10 Stück: a1 = Titel ersetzen, a2 = Beschreibung ersetzen, a3 = Foto-Tour verbessern, dann a4...
  "currentTitleNote": "1 Satz zum heutigen Titel",
  "fluff": ["Werbefloskeln, die wörtlich in der heutigen Beschreibung stehen"],
- "gaps": [ {"says": "was das Inserat sagt", "real": "was Fotos, Gäste oder Daten zeigen", "fix": "Fix", "cat": "title|desc|photos|reviews|consistency", "act": "a1..."} ]   // 3-6 echte Widersprüche, lieber weniger als erfunden
+ "gaps": [ {"says": "was das Inserat sagt", "real": "was Fotos, Gäste oder Daten zeigen", "fix": "Fix", "cat": "title|desc|photos|reviews|consistency", "act": "a1..."} ],   // 3-6 echte Widersprüche, lieber weniger als erfunden
+ "amenityNotes": {
+   "visibleNotListed": [ {"item": "Merkmal, das in photoShows klar zu sehen ist und NICHT in amenitiesAvailable steht, z. B. Kachelofen", "photos": [Foto-Nr.]} ],   // höchstens 4, nur was Gäste interessiert und die Fotobeschreibungen klar belegen
+   "textVsList": [ {"says": "was die Beschreibung nennt", "real": "was die Ausstattungsliste dazu zeigt", "fix": "Fix"} ]   // nur echte Widersprüche zwischen descriptionText und amenities, sonst leer
+ }
 }`;
 const SB = `{
  "titles": [ {"text": "höchstens 50 Zeichen", "note": "warum"} ],   // genau 3 Varianten A, B, C. Zähle die Zeichen nach. Nenne Gästezahl oder Ausstattung und die echte Lage.
  "recommendedTitle": "A|B|C",
  "descAfter": "neue Beschreibung, 500-900 Zeichen, Absätze und '• '-Aufzählung, nur belegte Fakten, Unsicheres in [eckigen Klammern]"
 }`;
-const promptA = (f, L) => `Du bist ein erfahrener Revenue-Manager für Kurzzeitvermietung und prüfst ein Airbnb-Inserat. Erstelle den analytischen Teil des Listing-Health-Befunds.\n\n${RULES(L)}\n- base-Werte: 90+ exzellent, 70-89 solide, 50-69 deutliche Lücken, unter 50 schwach. Begründe jeden Wert mit Belegen in evidence.\n- photos: stütze dich auf photoAnalysis. reviews: stütze dich auf Bewertungen, Kategorien und Zeitverlauf.\n- gain pro Bereich so wählen, dass base plus alle gain eines Bereichs höchstens 98 ergibt.\n- ota=true nur für Änderungen im Inserat (Titel, Text, Fotos, Ausstattung, Regeln). tag=elev8 für Automatisierungen wie Bewertungsbitte.\n\nANTWORT: ausschließlich gültiges JSON in dieser Form (Kommentare nicht ausgeben):\n${SA}\n\nDATEN:\n${JSON.stringify(f)}`;
+const promptA = (f, L) => `Du bist ein erfahrener Revenue-Manager für Kurzzeitvermietung und prüfst ein Airbnb-Inserat. Erstelle den analytischen Teil des Listing-Health-Befunds.\n\n${RULES(L)}\n- base-Werte: 90+ exzellent, 70-89 solide, 50-69 deutliche Lücken, unter 50 schwach. Begründe jeden Wert mit Belegen in evidence.\n- photos: stütze dich auf photoAnalysis. reviews: stütze dich auf Bewertungen, Kategorien und Zeitverlauf.\n- gain pro Bereich so wählen, dass base plus alle gain eines Bereichs höchstens 98 ergibt.\n- ota=true nur für Änderungen im Inserat (Titel, Text, Fotos, Ausstattung, Regeln). tag=elev8 für Automatisierungen wie Bewertungsbitte.\n- amenityCheck (gelistet, aber auf keinem Foto) ist bereits berechnet: wiederhole es nicht in gaps oder actions. Prüfe in amenityNotes nur, was auf den Fotos zu sehen ist und nicht in der Liste steht, und Widersprüche zwischen Beschreibung und Liste.\n\nANTWORT: ausschließlich gültiges JSON in dieser Form (Kommentare nicht ausgeben):\n${SA}\n\nDATEN:\n${JSON.stringify(f)}`;
 const promptB = (f, L) => `Du bist ein erfahrener Texter für Kurzzeitvermietung. Schreibe für dieses Airbnb-Inserat drei neue Titel und eine neue Beschreibung.\n\n${RULES(L)}\n- Titel: höchstens 50 Zeichen, zähle nach. Keine falschen Ortsangaben.\n- Die Beschreibung ist besser als die heutige: konkret, mit echten Ausstattungen, ehrlich zu Schwächen aus Bewertungen (zum Beispiel Lärm), ohne Werbefloskeln.\n\nANTWORT: ausschließlich gültiges JSON in dieser Form (Kommentare nicht ausgeben):\n${SB}\n\nDATEN:\n${JSON.stringify(f)}`;
 
 async function ask(prompt, key) {
@@ -54,11 +58,50 @@ function buildVis(f, photoRes, L) {
   return v;
 }
 
+/* ---- Ausstattung gegen Fotos und Text ---- */
+const PRIO = ['kühlschrank', 'geschirrspüler', 'aufzug', 'lift', 'waschmaschine', 'trockner', 'kaffeemaschine', 'babybett', 'gefrierschrank', 'föhn', 'klima', 'heizung', 'pool', 'balkon'];
+function amenityCheck(photoRes) {
+  const ac = photoRes && photoRes.analysis && photoRes.analysis.amenityCoverage; if (!Array.isArray(ac) || !ac.length) return null;
+  const pr = (n) => { const i = PRIO.findIndex((p) => String(n).toLowerCase().includes(p)); return i < 0 ? 99 : i; };
+  const names = (fn) => ac.filter(fn).map((a) => String(a.amenity || '').trim()).filter(Boolean);
+  return { checked: ac.length, shown: names((a) => a.photographed === true).length, notShown: names((a) => a.photographed === false).sort((a, b) => pr(a) - pr(b)), unclear: names((a) => a.photographed === 'unklar') };
+}
+function addAmenity(rep, chk, notes, d, photoRes, L) {
+  const en = L === 'en', q = (s) => (en ? `“${s}”` : `„${s}“`), list = (a, n) => a.slice(0, n).join(', '), acts = rep.actions, nid = () => 'a' + (acts.length + 1);
+  const listed = (d.amenities || []).filter((a) => a.available).map((a) => String(a.name || '').toLowerCase());
+  const nPh = (d.photos || []).length, pc = rep.cats.find((c) => c.id === 'photos'), cc = rep.cats.find((c) => c.id === 'consistency'), out = { checked: chk ? chk.checked : 0, notShown: chk ? chk.notShown : [], unclear: chk ? chk.unclear : [], visibleNotListed: [], textVsList: [] };
+  if (chk && chk.notShown.length && acts.length < 14) {
+    const id = nid(), top = list(chk.notShown, 5), n = chk.notShown.length;
+    acts.push({ id, cat: 'photos', t: en ? `Photograph listed amenities guests can’t see yet: ${top}` : `Gelistete Ausstattung fotografieren, die Gäste noch nicht sehen: ${top}`, min: 30, effort: en ? '30 min' : '30 Min', impact: n >= 4 ? 'Hoch' : 'Mittel', gain: Math.min(6, 2 + n),
+      why: en ? `${n} of ${chk.checked} amenities that can be photographed are not visible in any photo. Guests want to see them before booking.` : `${n} von ${chk.checked} fotografierbaren Ausstattungen sind auf keinem Foto zu sehen. Gäste wollen sie vor der Buchung sehen.`,
+      how: en ? 'Take one clear photo of each item and add it to the matching room in the tour. Not visible does not mean missing, only that guests cannot check it.' : 'Von jedem Punkt ein klares Foto machen und im passenden Raum der Tour ergänzen. Nicht sichtbar heißt nicht fehlend, Gäste können es nur nicht prüfen.', ota: true });
+    rep.gaps.push({ says: (en ? 'Amenities: ' : 'Ausstattung: ') + q(top), real: en ? `Not visible in any of the ${nPh} photos.` : `Auf keinem der ${nPh} Fotos zu sehen.`, fix: en ? 'Add a photo of each item.' : 'Foto von jedem Punkt ergänzen.', cat: 'photos', act: id });
+    pc.evidence.push(en ? `${n} of ${chk.checked} photographable amenities are in no photo: ${list(chk.notShown, 6)}` : `${n} von ${chk.checked} fotografierbaren Ausstattungen auf keinem Foto: ${list(chk.notShown, 6)}`);
+  }
+  const vis = (notes && Array.isArray(notes.visibleNotListed) ? notes.visibleNotListed : []).map((x) => ({ item: String((x && x.item) || '').trim().slice(0, 60), photos: Array.isArray(x && x.photos) ? x.photos.filter(Number.isFinite).slice(0, 4) : [] })).filter((x) => x.item && !listed.some((l) => l.includes(x.item.toLowerCase()) || x.item.toLowerCase().includes(l))).slice(0, 4);
+  out.visibleNotListed = vis;
+  if (vis.length && acts.length < 14) {
+    const id = nid(), items = list(vis.map((x) => x.item), 4);
+    acts.push({ id, cat: 'consistency', t: en ? `Name what the photos show but the amenities don’t: ${items}` : `Nennen, was die Fotos zeigen und die Ausstattung nicht: ${items}`, min: 10, effort: en ? '10 min' : '10 Min', impact: 'Mittel', gain: 3,
+      why: en ? 'These features are clearly visible in the photos but appear neither in the amenities list. Guests only notice them if they open every photo.' : 'Diese Merkmale sind auf den Fotos klar zu sehen, stehen aber nicht in der Ausstattungsliste. Gäste bemerken sie nur, wenn sie jedes Foto öffnen.',
+      how: en ? 'Add them to the amenities where Airbnb offers a matching item, otherwise mention them in the description.' : 'In die Ausstattung aufnehmen, wo Airbnb einen passenden Punkt anbietet, sonst in der Beschreibung nennen.', ota: true });
+    rep.gaps.push({ says: en ? 'Amenities list' : 'Ausstattungsliste', real: (en ? 'Visible in photos: ' : 'Auf Fotos zu sehen: ') + vis.map((x) => x.photos.length ? `${x.item} (${en ? 'photo' : 'Foto'} ${x.photos.join(', ')})` : x.item).join(', '), fix: en ? 'Name them in the amenities or the description.' : 'In Ausstattung oder Beschreibung nennen.', cat: 'consistency', act: id });
+    cc.evidence.push((en ? 'Visible in photos, not in the amenities: ' : 'Auf Fotos zu sehen, nicht in der Ausstattung: ') + list(vis.map((x) => x.item), 4));
+  }
+  const tv = (notes && Array.isArray(notes.textVsList) ? notes.textVsList : []).map((x) => ({ says: String((x && x.says) || '').trim().slice(0, 220), real: String((x && x.real) || '').trim().slice(0, 260), fix: String((x && x.fix) || '').trim().slice(0, 220) })).filter((x) => x.says && x.real).slice(0, 3);
+  out.textVsList = tv; tv.forEach((x) => { rep.gaps.push({ ...x, fix: x.fix || (en ? 'Align text and amenities.' : 'Text und Ausstattung angleichen.'), cat: 'consistency', act: 'a2' }); });
+  if (tv.length) cc.evidence.push(en ? `${tv.length} contradiction(s) between description and amenities` : `${tv.length} Widerspruch/Widersprüche zwischen Beschreibung und Ausstattung`);
+  rep.amenityCheck = out;
+}
+
 export async function generateReportV2(d, photoRes, lang, key) {
   if (!key) throw Object.assign(new Error('ANTHROPIC_API_KEY fehlt'), { status: 503 });
   const ps = photoScore(photoRes);
   if (ps != null) photoRes = { ...photoRes, analysis: { ...photoRes.analysis, overall: { ...(photoRes.analysis.overall || {}), score: ps } } };   // gleiche Foto-Note wie auf der Seite: Durchschnitt der Einzelwerte
-  const L = lang === 'en' ? 'en' : 'de', f = prepare(d, photoRes), fB = { ...f, reviews: (f.reviews || []).slice(0, 15) };
+  const L = lang === 'en' ? 'en' : 'de', chk = amenityCheck(photoRes), f = prepare(d, photoRes);
+  f.amenityCheck = chk;
+  f.photoShows = photoRes && photoRes.analysis && Array.isArray(photoRes.analysis.photos) ? photoRes.analysis.photos.map((p) => ({ n: p.position, room: p.room, shows: p.shows })) : null;
+  const fB = { ...f, reviews: (f.reviews || []).slice(0, 15), photoShows: null };
   const [A, B] = await Promise.all([until(promptA(f, L), okA, key, 'Bereiche oder Maßnahmen fehlen'), until(promptB(fB, L), okB, key, 'Titel länger als 50 Zeichen oder Beschreibung fehlt')]);
   if (!okA(A)) throw new Error('Die Analyse war unvollständig');
   if (!B || !Array.isArray(B.titles) || len(B.descAfter) < 100) throw new Error('Die KI hat keinen neuen Text geliefert');
@@ -68,5 +111,6 @@ export async function generateReportV2(d, photoRes, lang, key) {
   const rec = rep.titles.find((t) => t.rec);
   if (rec && rep.actions[0] && !rep.actions[0].copy) rep.actions[0].copy = rec.text;
   if (rep.actions[1] && !rep.actions[1].copy) rep.actions[1].copy = rep.descAfter;
+  addAmenity(rep, chk, A.amenityNotes, d, photoRes, L);
   return rep;
 }
