@@ -1,4 +1,4 @@
-// Ergänzungen für Live-Reports: Titelbild, Markt (nur Airbnb), Wettbewerb, Leerzustand der Widersprüche.
+// Ergänzungen für Live-Reports: Titelbild, Markt (nur Airbnb), Wettbewerb, Leerzustand der Widersprüche, lebendige Vorschau-Karte.
 (() => {
   'use strict';
   Object.assign(EN, {
@@ -26,7 +26,15 @@
   const _f = window.fetch;
   window.fetch = async function (u) {
     const r = await _f.apply(this, arguments);
-    try { if (String(u).indexOf('/api/report') === 0 && r.status === 200) { const j = JSON.parse(await r.clone().text()); if (j && j.report) MK = j.report.market || null; } } catch (e) { }
+    try {
+      if (String(u).indexOf('/api/report') === 0) {
+        if (PK.mode === 'demo' || PK.mode === 'final') { PK.mode = 'live'; PK.pv = null; renderPeek(); }
+        const j = JSON.parse(await r.clone().text());
+        if (r.status === 200 && j && j.report) { MK = j.report.market || null; }
+        else if (r.status === 202) { PK.pv = j.preview || null; renderPeek(); }
+        else if (r.status >= 400) { PK.mode = 'demo'; renderPeek(); }
+      }
+    } catch (e) { }
     return r;
   };
   const mo = (v) => v == null ? '–' : (MK && MK.currency !== 'CHF') ? `${MK.currency} ${Math.round(v)}` : chf(v);
@@ -34,6 +42,34 @@
   const pol = (p) => p ? T(POL[p] || p) : '–';
   const nn = (n) => n == null ? '–' : n === 1 ? `1 ${T('Nacht')}` : `${n} ${T('Nächte')}`;
   const live = () => state.reportLive && MK && MK.you;
+
+  /* Vorschau-Karte oben: füllt sich während der Prüfung mit echten Daten */
+  const PK = { mode: 'demo', pv: null }, DN = Math.round(D.cats.reduce((t, c) => t + (c.w && c.base != null ? c.base * c.w : 0), 0));
+  const clip = (t, n) => { t = String(t || '').split(/(?<=[.!?])\s/)[0]; return t.length > n ? t.slice(0, n - 1).replace(/\s+\S*$/, '') + '…' : t; };
+  function renderPeek() {
+    const p = document.querySelector('.peek'); if (!p) return;
+    const head = p.querySelector(':scope > div:first-child > div:last-child'), ring = p.querySelector('circle[stroke-dashoffset]'), num = p.querySelector('.ringbox .mid b'), rows = [...p.querySelectorAll('.row')];
+    if (!head || !ring || !num) return;
+    const en = state.lang === 'en', pv = PK.pv || {}, m = PK.mode, fx = (n) => String(n).replace('.', en ? '.' : ',');
+    const put = (i, g, cls, b, s) => { const r = rows[i]; if (!r) return; const ge = r.querySelector('.grade'), be = r.querySelector('b'), se = r.querySelector('p.small'); ge.textContent = g; ge.className = 'grade ' + cls; be.textContent = b; se.textContent = s; };
+    const top = (n, h, s, off) => { num.textContent = n; head.querySelector('b').textContent = h; head.querySelector('p').textContent = s; ring.setAttribute('stroke-dashoffset', (364.4 * (1 - off)).toFixed(1)); };
+    if (m === 'demo') {
+      top(String(DN), T('Note ' + gradeOf(DN)), T('Reviews stark, Titel schwach'), DN / 100);
+      put(0, 'D', 'g-bad', T('Titel'), T('Keine Amenity, falsche Lage')); put(1, 'C+', 'g-warn', T('Beschreibung'), T('0 von 49 Amenities genannt')); put(2, 'A–', 'g-good', T('Reviews'), T('4,88 ★ aus 24 Bewertungen'));
+    } else if (m === 'live') {
+      const wait = en ? 'Reading …' : 'Wird gelesen …', prog = pv.photoScore != null ? .7 : pv.title ? .4 : .12;
+      top('…', en ? 'Checking …' : 'Wird geprüft …', pv.photoScore != null ? (en ? `Photo grade ${pv.photoScore}/100` : `Foto-Note ${pv.photoScore}/100`) : pv.photos != null ? (en ? `${pv.photos} photos read` : `${pv.photos} Fotos gelesen`) : (en ? 'Your listing' : 'Dein Inserat'), prog);
+      put(0, '…', 'g-mid', en ? 'Title' : 'Titel', pv.title ? clip(pv.title, 46) : wait);
+      put(1, '…', 'g-mid', en ? 'Description' : 'Beschreibung', pv.amenities != null ? (en ? `${pv.amenities} amenities listed · ${pv.descChars} characters of text` : `${pv.amenities} Ausstattungen · ${pv.descChars} Zeichen Text`) : wait);
+      put(2, pv.rating != null ? '★' : '…', 'g-mid', 'Reviews', pv.rating != null ? (en ? `${fx(Number(pv.rating).toFixed(2))} ★ from ${pv.reviews} reviews` : `${fx(Number(pv.rating).toFixed(2))} ★ aus ${pv.reviews} Bewertungen`) : wait);
+    } else if (m === 'final' && state.reportLive) {
+      const cs = D.cats.filter((c) => c.base != null), n = Math.round(cs.reduce((t, c) => t + c.base * c.w, 0)), best = cs.slice().sort((a, b) => b.base - a.base)[0], worst = cs.slice().sort((a, b) => a.base - b.base)[0];
+      top(String(n), (en ? 'Grade ' : 'Note ') + gradeOf(n), en ? `${best.name} strong, ${worst.name} weak` : `${best.name} stark, ${worst.name} schwach`, n / 100);
+      ['title', 'desc', 'reviews'].forEach((id, i) => { const c = D.cats.find((x) => x.id === id); if (c) put(i, gradeOf(c.base), gcls(c.base), c.name, clip(c.finding, 58)); });
+    }
+  }
+  const _rv = reveal; reveal = function () { _rv(); PK.mode = state.reportLive ? 'final' : 'demo'; renderPeek(); };
+  const _sl = setLang; setLang = function (l) { _sl(l); renderPeek(); };
 
   /* Titelbild in der Vorschau */
   const _rs = renderStudio;
