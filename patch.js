@@ -44,5 +44,6 @@ export const patchScript = (js) => SWAPS.reduce((h, [a, b]) => h.split(a).join(b
 export function patchPage(html) {
   let h = html;
   for (const [a, b] of SWAPS) h = h.split(a).join(b);
+  h = h.replace(/<div class="note warn"><b>\$\{T\('Ehrlich gesagt:'\)\}<\/b>[\s\S]*?<\/div>/, '');   // Kasten "Ehrlich gesagt" in der Score-Erklaerung entfernen
   return h.includes('</head>') ? h.replace('</head>', () => `<style id="magnetCss">${CSS}</style></head>`) : h;
 }
