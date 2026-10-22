@@ -4,7 +4,6 @@
   const PDFMODE = /[?&]pdf=1(&|$)/.test(location.search), Q = new URLSearchParams(location.search);
   const L = (de, en) => (state.lang === 'en' ? en : de);
   const G = { unlocked: PDFMODE, id: null, mk: null, token: Q.get('k') || null, scanned: false, viewed: false };
-  try { if (sessionStorage.getItem('lh_unlocked') === '1') G.unlocked = true; } catch (e) { }
   let sid = ''; try { sid = sessionStorage.getItem('lh_sid') || ''; if (!sid) { sid = Math.random().toString(36).slice(2, 12); sessionStorage.setItem('lh_sid', sid); } } catch (e) { sid = Math.random().toString(36).slice(2, 12); }
   const ev = (e, o = {}) => { if (PDFMODE) return; try { const b = JSON.stringify({ e, sid, id: G.id || undefined, lang: state.lang, ...o }); if (navigator.sendBeacon) navigator.sendBeacon('/api/event', new Blob([b], { type: 'application/json' })); else fetch('/api/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: b, keepalive: true }); } catch (x) { } };
   const gated = () => !G.unlocked && state.reportLive && state.mode === 'prospect';
@@ -16,7 +15,7 @@
     try {
       if (String(u).indexOf('/api/report') === 0) {
         if (!G.scanned) { G.scanned = true; ev('scan_start'); }
-        if (r.status === 200) { const j = JSON.parse(await r.clone().text()); if (j && j.id) { G.id = j.id; G.mk = (j.report && j.report.market) || null; } }
+        if (r.status === 200) { const j = JSON.parse(await r.clone().text()); if (j && j.id) { if (G.id !== j.id) G.viewed = false; G.id = j.id; G.mk = (j.report && j.report.market) || null; if (!PDFMODE) { let u = false; try { u = sessionStorage.getItem('lh_u_' + j.id) === '1'; } catch (x) { } G.unlocked = u; } } }
         else if (r.status >= 400) { G.scanned = false; ev('scan_error', { zone: String(r.status) }); }
       }
     } catch (e) { }
@@ -66,7 +65,8 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
     return g;
   }
   function renderGate() {
-    const g = gateCard(); if (!g || g.classList.contains('done')) return;
+    const g = gateCard(); if (!g) return;
+    if (g.classList.contains('done')) { if (!gated()) return; g.classList.remove('done'); g.innerHTML = ''; delete g.dataset.lang; }   // neues Inserat: Gate wieder aufbauen
     if (g.dataset.lang === state.lang && g.querySelector('#gateForm')) return;   // nicht neu aufbauen: sonst gehen Eingaben verloren
     g.dataset.lang = state.lang;
     const pot = G.mk && G.mk.potential, cur = G.mk && G.mk.currency || 'CHF', n = (D.actions || []).length;
@@ -75,6 +75,7 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
       <p>${L('Du siehst oben, was auffällt. Im Report steht, was du dagegen tust:', 'Above you see what stands out. The report shows what to do about it:')}</p>
       <ul><li>${L(`Alle ${n} Maßnahmen mit fertigen Texten`, `All ${n} actions with ready-made copy`)}</li><li>${L('Neuer Titel und neue Beschreibung', 'New title and description')}</li><li>${L('Foto-Reihenfolge und Ersetzen-Liste', 'Photo order and replace list')}</li><li>${L('Marktvergleich mit den drei Besten im Umkreis', 'Market comparison with the three best nearby')}</li><li>${L('Alles als PDF per E-Mail', 'All of it as a PDF by email')}</li></ul></div>
       <form id="gateForm" novalidate><input id="gMail" type="email" autocomplete="email" inputmode="email" placeholder="${L('Deine E-Mail-Adresse', 'Your email address')}" aria-label="${L('E-Mail-Adresse', 'Email address')}"><label class="gcons"><input id="gConsent" type="checkbox"><span>${L('Ich möchte den Report per E-Mail erhalten und bin einverstanden, dass Elev8 mich dazu kontaktiert.', 'I want to receive the report by email and agree that Elev8 contacts me about it.')}</span></label><button class="btn primary" type="submit" id="gBtn">${L('Report freischalten', 'Unlock report')}</button><div class="err" id="gErr" role="alert"></div></form>`;
+    try { const m = sessionStorage.getItem('lh_mail'); if (m) document.getElementById('gMail').value = m; } catch (x) { }
     if (!G.viewed) { G.viewed = true; ev('gate_view', { score: Math.round(overall()) }); }
   }
   function lockCards() {
@@ -128,7 +129,7 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
     try {
       const r = await fetch('/api/lead', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }), j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error || r.status);
-      G.token = j.token || null; G.unlocked = true; try { sessionStorage.setItem('lh_unlocked', '1'); } catch (x) { }
+      G.token = j.token || null; G.unlocked = true; try { sessionStorage.setItem('lh_u_' + G.id, '1'); sessionStorage.setItem('lh_mail', mail); } catch (x) { }
       ev('unlocked'); const g = document.getElementById('gate'); g.classList.add('done');
       g.innerHTML = `<div><h2>${L('Freigeschaltet. Dein Report ist unterwegs.', 'Unlocked. Your report is on its way.')}</h2><p>${L(`Das PDF kommt in wenigen Minuten an ${mail}. Hier siehst du schon alles.`, `The PDF arrives at ${mail} in a few minutes. You can already see everything here.`)}</p>${G.mk && G.mk.potential ? `<p class="money">${L('Dein Inserat lässt geschätzt', 'Your listing leaves an estimated')} ${G.mk.currency || 'CHF'} ${String(G.mk.potential).replace(/\B(?=(\d{3})+(?!\d))/g, '’')} ${L('pro Jahr liegen.', 'a year on the table.')}</p><p style="font-size:.85rem">${L('Schätzung: Abstand zur Belegung des oberen Viertels der Vergleichsinserate, bei gleichem Preis pro Nacht.', 'Estimate: gap to the occupancy of the top quarter of comparable listings, at your current nightly rate.')}</p>` : ''}<div class="row2"><a class="btn primary" href="#plan">${L('Zum Plan', 'To the plan')}</a></div></div>`;
       try { bindBook(); } catch (x) { } renderAll(); applyGate();
@@ -168,7 +169,7 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
   reveal = function () {
     _rv();
     if (PDFMODE) { try { if (window.pdBuild) window.pdBuild(); patchPrint(); } catch (e) { } window.__pdfReady = true; return; }
-    if (state.reportLive) ev('scan_done', { score: Math.round(overall()) });
+    if (state.reportLive) { ev('scan_done', { score: Math.round(overall()) }); G.scanned = false; }
     applyGate();
     if (gated()) { const g = document.getElementById('gate'); if (g) setTimeout(() => g.scrollIntoView({ behavior: 'smooth', block: 'center' }), 900); }
   };
