@@ -1,3 +1,62 @@
+/* Beispiel-Report auf Foto-Befunde der KI-Analyse (zwei Läufe, nur stabile Befunde) nachziehen */
+(function () {
+  const D_ = D, set = (o, k, v) => { o[k] = v; };
+  const P = D_.cats.find((c) => c.id === 'photos'), C = D_.cats.find((c) => c.id === 'consistency');
+  P.base = 64;
+  P.finding = 'Die Fotos sind hell und gepflegt, aber technisch mittelmäßig. Die Schlafsituation passt nicht zum Inserat: Schlafzimmer 2 ist nicht zu erkennen, Schlafzimmer 3 ist ein leerer Raum.';
+  P.evidence = ['Foto-Note 64 von 100 (KI-Analyse aller 20 Fotos): flaues Licht, schiefe Winkel, mehrere Hochformate', 'Titelbild (Foto 6, Wohnzimmer) nur „mittel“: grau und leer. Foto 10 ist deutlich heller (4,25 von 5).', 'Schlafzimmer 3: Foto 4 zeigt einen leeren Raum ohne Bett und ohne Schlafcouch', 'Schlafzimmer 2 mit zwei Einzelbetten ist auf keinem Foto zu erkennen, Foto 2 zeigt ein Doppelbett', 'Innenhof (Foto 9): Beton, Unkraut, keine Möbel. Schwächstes Foto der Tour.', 'Die Fotos 3, 4, 7, 8, 14, 15 und 20 sind Wiederholungen oder unattraktiv', '15 von 20 Fotos ohne Raumzuordnung'];
+  C.evidence = C.evidence.map((e) => e.indexOf('„Schlafzimmer 3“ besteht') === 0 ? '„Schlafzimmer 3“: Foto 4 zeigt einen leeren Raum ohne Bett und ohne Schlafcouch' : e);
+  C.evidence.splice(2, 0, 'Das Inserat nennt „Privater Innenhof oder Balkon“, Foto 9 zeigt einen unmöblierten Betonhof');
+  const T_ = D_.titles; T_.find((t) => t.id === 'A').text = 'Altstadt-Apartment für 6 · 3 Zimmer & Lift'; T_.find((t) => t.id === 'A').note = 'Gästezahl und zwei Merkmale. Spricht Gruppen an. Ohne „Balkon“, weil der Innenhof auf den Fotos keiner ist.';
+  T_.find((t) => t.id === 'B').text = 'Geräumig mitten in der Altstadt · mit Lift';
+  const a1 = D_.actions.find((a) => a.id === 'a1'); a1.copy = 'Geräumig mitten in der Altstadt · mit Lift'; a1.note = 'Wir haben „Balkon“ bewusst weggelassen: Foto 9 zeigt einen unmöblierten Innenhof.';
+  const a3 = D_.actions.find((a) => a.id === 'a3'); a3.gain = 10;
+  a3.why = 'Gäste scannen die Tour nach Räumen. 15 von 20 Fotos sind keinem Raum zugeordnet, und die KI-Analyse findet Wiederholungen, schiefe Winkel und unattraktive Motive.';
+  a3.how = 'Räume anlegen und Fotos zuordnen. Die Fotos 3, 7, 8, 14, 15 und 20 streichen. Titelbild prüfen: Foto 10 ist heller als Foto 6. Danach die Reihenfolge aus dem Foto-Check übernehmen.';
+  D_.actions.splice(3, 0,
+    { id: 'a15', cat: 'photos', ota: true, t: 'Schlafzimmer 2 und 3 frisch bezogen neu fotografieren', min: 60, effort: '1 Std', impact: 'Hoch', gain: 8, why: 'Foto 4 zeigt für Schlafzimmer 3 einen leeren Raum, Schlafzimmer 2 ist auf keinem Foto zu erkennen. Gäste prüfen, wo sie schlafen.', how: 'Betten beziehen, die Schlafcouch aufbauen und bei eingeschaltetem Licht im Querformat aus der Tür fotografieren. Danach Foto 4 ersetzen.' },
+    { id: 'a16', cat: 'photos', t: 'Innenhof aufräumen und neu fotografieren', min: 90, effort: '1 bis 2 Std', impact: 'Mittel', gain: 4, why: 'Foto 9 ist das schwächste der Tour: Unkraut, Beton, keine Möbel. Der Hof wird als „Balkon“ geführt.', how: 'Unkraut entfernen, Fassade abwaschen, zwei Stühle und Pflanzen hinstellen und neu fotografieren. Bis dahin Foto 9 aus der Tour nehmen.' });
+  D_.descAfter = D_.descAfter.replace('• Lift, Balkon, WLAN und eigener Arbeitsplatz', '• Lift, WLAN, eigener Arbeitsplatz und Zugang zum Innenhof');
+  const g = D_.gaps.find((x) => x.says === '„Schlafzimmer 3“');
+  if (g) { g.says = '„Schlafzimmer 3“ mit Schlafcouch'; g.real = 'Foto 4 zeigt einen leeren Raum ohne Bett und ohne Schlafcouch.'; g.fix = 'Schlafcouch aufbauen und neu fotografieren oder das Zimmer ehrlich benennen.'; g.cat = 'photos'; g.act = 'a15'; }
+  D_.gaps.push({ says: 'Ausstattung: „Privater Innenhof oder Balkon“', real: 'Foto 9 zeigt einen betonierten Innenhof mit Unkraut und ohne Möbel.', fix: 'Nicht als Balkon bewerben. Hof aufräumen und möblieren.', cat: 'photos', act: 'a16' });
+  Object.assign(EN, {
+    'Die Fotos sind hell und gepflegt, aber technisch mittelmäßig. Die Schlafsituation passt nicht zum Inserat: Schlafzimmer 2 ist nicht zu erkennen, Schlafzimmer 3 ist ein leerer Raum.': 'The photos are bright and tidy but technically mediocre. The sleeping setup doesn’t match the listing: bedroom 2 can’t be recognised, bedroom 3 is an empty room.',
+    'Foto-Note 64 von 100 (KI-Analyse aller 20 Fotos): flaues Licht, schiefe Winkel, mehrere Hochformate': 'Photo grade 64 of 100 (AI analysis of all 20 photos): flat light, crooked angles, several portrait shots',
+    'Titelbild (Foto 6, Wohnzimmer) nur „mittel“: grau und leer. Foto 10 ist deutlich heller (4,25 von 5).': 'Cover photo (photo 6, living room) only “medium”: grey and empty. Photo 10 is much brighter (4.25 of 5).',
+    'Schlafzimmer 3: Foto 4 zeigt einen leeren Raum ohne Bett und ohne Schlafcouch': 'Bedroom 3: photo 4 shows an empty room with no bed and no sofa bed',
+    'Schlafzimmer 2 mit zwei Einzelbetten ist auf keinem Foto zu erkennen, Foto 2 zeigt ein Doppelbett': 'Bedroom 2 with two single beds can’t be recognised in any photo, photo 2 shows a double bed',
+    'Innenhof (Foto 9): Beton, Unkraut, keine Möbel. Schwächstes Foto der Tour.': 'Courtyard (photo 9): concrete, weeds, no furniture. The weakest photo in the tour.',
+    'Die Fotos 3, 4, 7, 8, 14, 15 und 20 sind Wiederholungen oder unattraktiv': 'Photos 3, 4, 7, 8, 14, 15 and 20 are repetitions or unattractive',
+    '„Schlafzimmer 3“: Foto 4 zeigt einen leeren Raum ohne Bett und ohne Schlafcouch': '“Bedroom 3”: photo 4 shows an empty room with no bed and no sofa bed',
+    'Das Inserat nennt „Privater Innenhof oder Balkon“, Foto 9 zeigt einen unmöblierten Betonhof': 'The listing says “private courtyard or balcony”, photo 9 shows an unfurnished concrete courtyard',
+    'Gästezahl und zwei Merkmale. Spricht Gruppen an. Ohne „Balkon“, weil der Innenhof auf den Fotos keiner ist.': 'Guest count and two features. Appeals to groups. Without “balcony”, because the courtyard in the photos isn’t one.',
+    'Wir haben „Balkon“ bewusst weggelassen: Foto 9 zeigt einen unmöblierten Innenhof.': 'We deliberately left out “balcony”: photo 9 shows an unfurnished courtyard.',
+    'Gäste scannen die Tour nach Räumen. 15 von 20 Fotos sind keinem Raum zugeordnet, und die KI-Analyse findet Wiederholungen, schiefe Winkel und unattraktive Motive.': 'Guests scan the tour for rooms. 15 of 20 photos aren’t assigned to a room, and the AI analysis finds repetitions, crooked angles and unattractive shots.',
+    'Räume anlegen und Fotos zuordnen. Die Fotos 3, 7, 8, 14, 15 und 20 streichen. Titelbild prüfen: Foto 10 ist heller als Foto 6. Danach die Reihenfolge aus dem Foto-Check übernehmen.': 'Create rooms and assign photos. Remove photos 3, 7, 8, 14, 15 and 20. Check the cover: photo 10 is brighter than photo 6. Then take the order from the photo check.',
+    'Schlafzimmer 2 und 3 frisch bezogen neu fotografieren': 'Re-shoot bedrooms 2 and 3 with fresh bedding',
+    'Foto 4 zeigt für Schlafzimmer 3 einen leeren Raum, Schlafzimmer 2 ist auf keinem Foto zu erkennen. Gäste prüfen, wo sie schlafen.': 'Photo 4 shows an empty room for bedroom 3, bedroom 2 can’t be recognised in any photo. Guests check where they will sleep.',
+    'Betten beziehen, die Schlafcouch aufbauen und bei eingeschaltetem Licht im Querformat aus der Tür fotografieren. Danach Foto 4 ersetzen.': 'Make the beds, set up the sofa bed and shoot from the doorway in landscape with the lights on. Then replace photo 4.',
+    'Innenhof aufräumen und neu fotografieren': 'Tidy the courtyard and re-shoot it',
+    'Foto 9 ist das schwächste der Tour: Unkraut, Beton, keine Möbel. Der Hof wird als „Balkon“ geführt.': 'Photo 9 is the weakest in the tour: weeds, concrete, no furniture. The courtyard is listed as a “balcony”.',
+    'Unkraut entfernen, Fassade abwaschen, zwei Stühle und Pflanzen hinstellen und neu fotografieren. Bis dahin Foto 9 aus der Tour nehmen.': 'Remove the weeds, wash the facade, put out two chairs and plants and re-shoot. Until then take photo 9 out of the tour.',
+    '1 bis 2 Std': '1 to 2 hrs', '„Schlafzimmer 3“ mit Schlafcouch': '“Bedroom 3” with sofa bed',
+    'Foto 4 zeigt einen leeren Raum ohne Bett und ohne Schlafcouch.': 'Photo 4 shows an empty room with no bed and no sofa bed.',
+    'Schlafcouch aufbauen und neu fotografieren oder das Zimmer ehrlich benennen.': 'Set up the sofa bed and re-shoot, or name the room honestly.',
+    'Ausstattung: „Privater Innenhof oder Balkon“': 'Amenity: “Private courtyard or balcony”', 'Foto 9 zeigt einen betonierten Innenhof mit Unkraut und ohne Möbel.': 'Photo 9 shows a concrete courtyard with weeds and no furniture.',
+    'Nicht als Balkon bewerben. Hof aufräumen und möblieren.': 'Don’t advertise it as a balcony. Tidy and furnish the courtyard.', 'Note C+': 'Grade C+',
+  });
+  /* Vorschau-Karte oben: Score aus den Daten */
+  const sc = D_.cats.reduce((t, c) => t + (c.w && c.base != null ? c.base * c.w : 0), 0), n = Math.round(sc), g2 = n >= 92 ? 'A' : n >= 88 ? 'A–' : n >= 84 ? 'B+' : n >= 78 ? 'B' : n >= 72 ? 'B–' : n >= 66 ? 'C+' : n >= 60 ? 'C' : n >= 50 ? 'D' : 'F';
+  const peek = document.querySelector('.peek'); if (peek) {
+    const nodes = []; const w = document.createTreeWalker(peek, NodeFilter.SHOW_TEXT); let t; while ((t = w.nextNode())) nodes.push(t);
+    nodes.forEach((x) => { const v = x.nodeValue.trim(); if (v === '72') { x.nodeValue = String(n); try { _nodes.forEach((o) => { if (o.n === x) o.de = String(n); }); } catch (e) { } } if (v === 'Note B–') { x.nodeValue = 'Note ' + g2; try { _nodes.forEach((o) => { if (o.n === x) o.de = 'Note ' + g2; }); } catch (e) { } } });
+    const ring = peek.querySelector('circle[stroke-dashoffset]'); if (ring) ring.setAttribute('stroke-dashoffset', (364.4 * (1 - n / 100)).toFixed(1));
+    if (g2 !== 'C+') EN['Note ' + g2] = 'Grade ' + g2;
+    try { _nodes.forEach((x) => { if (x.n && peek.contains(x.n)) { if (x.de === '72') x.de = String(n); if (x.de === 'Note B–') x.de = 'Note ' + g2; } }); applyStatic(); } catch (e) { }
+  }
+})();
+
 // Live-Report: lädt den Befund-Motor-Report in die Seite und ersetzt die Beispieldaten.
 (() => {
   'use strict';
@@ -18,6 +77,13 @@
     'Foto-Analyse fehlgeschlagen': 'Photo analysis failed', 'Die KI-Antwort war nicht lesbar': 'The AI response was not readable', 'Die Analyse ist nicht möglich.': 'The analysis is not possible.', 'Die Analyse dauert zu lange. Bitte später erneut versuchen.': 'The analysis takes too long. Please try again later.',
     '{0} Zeichen': '{0} characters', 'So liest sich das Inserat heute.': 'This is how the listing reads today.',
   });
+  function normalizeOverall(res) {
+    const a = res && res.analysis; if (!a || !Array.isArray(a.photos) || a._norm) return;
+    const ok = a.photos.filter((p) => [p.brightness, p.sharpness, p.composition, p.tidiness].every(Number.isFinite)); if (!ok.length) return;
+    const s = Math.round(ok.reduce((t, p) => t + (p.brightness + p.sharpness + p.composition + p.tidiness) / 4, 0) / ok.length * 20);
+    a.overall = { ...(a.overall || {}), score: s, grade: gradeOf(s) }; a._norm = true;
+  }
+  const _renderLive = renderLive; renderLive = function () { if (state.live && state.live.res) normalizeOverall(state.live.res); return _renderLive(); };
   const hide = (ids, on) => ids.forEach((i) => { const e = document.getElementById(i); if (e) e.classList.toggle('hidden', on); });
 
   function resetDemo() {
@@ -35,6 +101,7 @@
     D.sources = D.sources.map((s) => s.id === 'airbnb' ? { ...s, what: 'Titel, Beschreibung, Ausstattung, Fotos und Bewertungen im Volltext.' }
       : s.id === 'market' ? { ...s, s: 'lock', what: 'Preis- und Belegungsvergleich mit dem Umkreis.', unlocks: ['Wie liegt dein Preis im Vergleich zum Umkreis?', 'Welche Inserate verdienen am meisten und warum?'] } : s);
     state.done = new Set(); state.shown = 0; state.titleSel = r.recommendedTitle || 'cur'; state.openKey = null; state.clicks = new Set();
+    normalizeOverall(photoCheck); const pc = D.cats.find((c) => c.id === 'photos'); if (pc && photoCheck.analysis.overall && Number.isFinite(photoCheck.analysis.overall.score)) pc.base = Math.min(95, photoCheck.analysis.overall.score);
     const sugg = liveOrders(photoCheck); state.live = { status: 'done', res: photoCheck, sugg, order: sugg.slice(), touched: false };
     $('.demo').classList.add('hidden'); hide(['wettbewerb', 'kanaele'], true); $('#photoView').classList.add('hidden');
     $('#urlHelp').textContent = T('Live-Report für deinen Link. KI-Analyse aus öffentlichen Daten, Fehler sind möglich.');
