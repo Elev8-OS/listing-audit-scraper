@@ -6,6 +6,7 @@ import path from 'node:path';
 import { salvageJson } from './report.js';
 import { generateReportV2 } from './engine.js';
 import { marketFor } from './market.js';
+import { createLeads } from './leads.js';
 
 // Der Scraper setzt max_tokens fest auf 8000. Mit Nachdenken wird die Foto-Antwort dann abgeschnitten.
 const realFetch = globalThis.fetch;
@@ -32,7 +33,7 @@ const IP_WINDOW = Number(process.env.IP_WINDOW_H || 168) * 3600e3;
 const read = (f) => { try { return fs.readFileSync(new URL(f, import.meta.url), 'utf8'); } catch { return null; } };
 const uiHtml = read('./ui.html') || '';
 const liveJs = (f) => read('./' + f) || '';
-const injectLive = (h) => (h.includes('/live.js') ? h : h.replace('</body>', '<script src="/live.js"></script><script src="/live2.js"></script></body>'));
+const injectLive = (h) => (h.includes('/live.js') ? h : h.replace('</body>', '<script src="/live.js"></script><script src="/live2.js"></script><script src="/gate.js"></script></body>'));
 const pageHtml = () => injectLive(read('./public/index.html') || '<!doctype html><meta charset="utf-8"><title>Listing Health</title><p style="font:16px system-ui;padding:40px">Die Seite ist noch nicht hochgeladen (public/index.html fehlt).</p>');
 
 /* ---- Hilfen ---- */
@@ -81,21 +82,8 @@ function getAnalysis(j) {
   return a && Array.isArray(a.photos) && a.photos.length ? completeAnalysis(a) : null;
 }
 
-/* ---- Lead-Eingang ---- */
-async function handleLead(req, res) {
-  if (limited('lead:' + ipOf(req), 5, 3600e3)) return json(res, 429, { ok: false, error: 'Zu viele Anfragen. Bitte später erneut versuchen.' });
-  let p; try { p = JSON.parse(await body(req)); } catch (e) { return json(res, e.status || 400, { ok: false, error: 'Ungültige Anfrage' }); }
-  const email = String(p.email || '').trim(), consent = p.consent && p.consent.given === true;
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !consent) return json(res, 422, { ok: false, error: 'E-Mail oder Einwilligung fehlt' });
-  const lead = { receivedAt: new Date().toISOString(), name: String(p.name || '').slice(0, 120), email: email.slice(0, 200), phone: String(p.phone || '').slice(0, 40), consent: p.consent, listing: p.listing || null, score: p.score || null, view: p.view || null, lang: p.lang || null, topFindings: (p.topFindings || []).slice(0, 5), openedAreas: (p.openedAreas || []).slice(0, 40), source: 'listing-health' };
-  try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.appendFileSync(path.join(DATA_DIR, 'leads.jsonl'), JSON.stringify(lead) + '\n'); } catch (e) { console.error('LEAD speichern fehlgeschlagen', e.message); }
-  console.log('LEAD', JSON.stringify(lead));
-  if (LEAD_WEBHOOK_URL) {
-    try { const r = await fetch(LEAD_WEBHOOK_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(lead), signal: AbortSignal.timeout(8000) }); if (!r.ok) throw new Error('Webhook ' + r.status); }
-    catch (e) { console.error('LEAD-Webhook fehlgeschlagen', e.message); }
-  }
-  return json(res, 200, { ok: true });
-}
+/* ---- Lead-Gate: Ereignisse, Lead + GHL-E-Mail, PDF, Klicks, Statistik ---- */
+const LG = createLeads({ DATA_DIR, API_KEY, PORT, json, limited, ipOf, body, cachedReport });
 
 /* ---- Foto-Check: Scrape + Foto-Analyse für die Seite ---- */
 const jobs = new Map(); // id -> { status, step, error, startedAt }
@@ -211,10 +199,15 @@ http.createServer = (...args) => {
       const u = new URL(req.url || '/', 'http://localhost'), p = u.pathname;
       if (req.method === 'GET' && p === '/ui') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' }); return res.end(uiHtml); }
       if (req.method === 'GET' && (p === '/' || p === '/index.html')) { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' }); return res.end(pageHtml()); }
-      if (req.method === 'POST' && p === '/api/lead') return await handleLead(req, res);
+      if (req.method === 'POST' && p === '/api/lead') return await LG.lead(req, res);
+      if (req.method === 'POST' && p === '/api/event') return await LG.event(req, res);
+      if (req.method === 'GET' && p.startsWith('/r/')) return LG.pdf(req, res, p.slice(3));
+      if (req.method === 'GET' && p.startsWith('/go/')) return LG.go(req, res, p.slice(4));
+      if (req.method === 'GET' && p === '/api/stats') return LG.stats(req, res, u);
+      if (req.method === 'GET' && p === '/api/pdf-test') return await LG.pdfTest(req, res, u);
       if (req.method === 'GET' && p === '/api/photo-check') return await handlePhotoCheck(req, res, u);
       if (req.method === 'GET' && p === '/api/report') return await handleReport(req, res, u);
-      if (req.method === 'GET' && (p === '/live.js' || p === '/live2.js')) { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' }); return res.end(liveJs(p.slice(1))); }
+      if (req.method === 'GET' && (p === '/live.js' || p === '/live2.js' || p === '/gate.js')) { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' }); return res.end(liveJs(p.slice(1))); }
     } catch (e) { return json(res, 500, { ok: false, error: 'Interner Fehler' }); }
     return handler(req, res);
   });
