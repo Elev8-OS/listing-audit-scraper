@@ -140,7 +140,7 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
   /* Drucken: gesperrt, bis freigeschaltet; mit klickbaren Links */
   function patchPrint() {
     const d = document.getElementById('printDoc'); if (!d) return;
-    const url = G.token ? `${location.origin}/go/${G.token}` : (typeof BOOKING_URL !== 'undefined' ? BOOKING_URL : 'https://elev8-suite.com');
+    const O = (Q.get('base') || location.origin).replace(/\/+$/, ''), url = G.token ? `${O}/go/${G.token}` : (typeof BOOKING_URL !== 'undefined' ? BOOKING_URL : 'https://elev8-suite.com');
     d.querySelectorAll('.cta b').forEach((b) => { const a = document.createElement('a'); a.className = 'ctab'; a.href = url; a.textContent = b.textContent; b.replaceWith(a); });
     d.querySelectorAll('.pbnd svg').forEach((s) => { if (s.parentElement.tagName === 'A') return; const a = document.createElement('a'); a.href = 'https://elev8-suite.com'; s.replaceWith(a); a.appendChild(s); });
     d.querySelectorAll('.fine').forEach((f) => { if (f.querySelector('a')) return; f.insertAdjacentHTML('beforeend', ` <a href="https://elev8-suite.com" style="text-decoration:underline">elev8-suite.com</a>`); });
