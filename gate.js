@@ -35,7 +35,7 @@
 .gate ul{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:6px;font-size:.93rem}.gate li{display:flex;gap:8px;align-items:flex-start}.gate li::before{content:"";flex:none;width:7px;height:7px;border-radius:50%;background:var(--y,#F6BB12);margin-top:.5em}
 .gate form{display:grid;gap:10px}.gate input[type=email]{min-height:50px;border:1.5px solid var(--line,#E6E6E1);border-radius:14px;padding:0 16px;font:inherit;background:var(--bg,#fff);color:var(--ink,#0A0A0A)}
 .gate input[type=email]:focus{outline:none;border-color:var(--ink,#0A0A0A);box-shadow:0 0 0 4px rgba(246,187,18,.3)}
-.gate .chk{display:flex;gap:9px;align-items:flex-start;font-size:.8rem;color:var(--ink3,#85857F);line-height:1.4}.gate .chk input{margin-top:.2em;flex:none}
+.gate .gcons{display:flex;gap:9px;align-items:flex-start;font-size:.8rem;color:var(--ink3,#85857F);line-height:1.4}.gate .gcons input{margin-top:.2em;flex:none}
 .gate .err{color:var(--bad,#B3261E);font-size:.86rem;min-height:1.2em}
 .gate.done{grid-template-columns:1fr;border-color:var(--good,#14803F);background:var(--goodbg,#E5F4EA)}
 .lockcard{margin:12px 0;border:1.5px dashed var(--ink3,#85857F);border-radius:16px;padding:16px 18px;display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap;cursor:pointer}
@@ -48,6 +48,11 @@ html.gated #compView,html.gated #market,html.gated #gapList,html.gated #liveFoto
 html.gated #compView::before,html.gated #market::before,html.gated #gapList::before,html.gated #liveFoto::before,html.gated #descView[data-after="1"]::before{content:attr(data-lk);display:inline-block;margin:0 0 10px;background:var(--y,#F6BB12);color:#0A0A0A;font-weight:700;font-size:.82rem;padding:5px 12px;border-radius:99px;position:relative;z-index:2;filter:none}
 html.gated #titleTabs button.lk,html.gated #descTabs button.lk{opacity:.6}
 html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{content:"";display:inline-block;width:.85em;height:.85em;margin-left:.45em;vertical-align:-.1em;background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M17 9V7a5 5 0 0 0-10 0v2H5v12h14V9zm-8-2a3 3 0 0 1 6 0v2H9z'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M17 9V7a5 5 0 0 0-10 0v2H5v12h14V9zm-8-2a3 3 0 0 1 6 0v2H9z'/%3E%3C/svg%3E") center/contain no-repeat}
+/* Handy: Report-Raster darf nicht von breitem Inhalt aufgedehnt werden, Kopfzeile passt, Tippflaechen mindestens 44 px */
+@media(max-width:1023px){.rg{grid-template-columns:minmax(0,1fr)!important}.rg>*{min-width:0}}
+@media(max-width:440px){header .cta{display:none}}
+@media(max-width:560px){.panel{grid-template-columns:minmax(0,1fr)}.lgrid{grid-template-columns:minmax(0,1fr)}.row2{flex-wrap:wrap}.btn{white-space:normal;max-width:100%;text-align:center}}
+@media(max-width:560px){.btn.sm,button.tog,button.chk,#titleTabs button,#descTabs button,header button,.tile,.fbtn{min-height:44px}button.tog,button.chk{min-width:44px}.gate input[type=checkbox]{width:22px;height:22px}.gate .gcons{font-size:.84rem}.gate{padding:20px 18px}}
 @media print{#printDoc .ctab{display:inline-block;margin:10pt 0 0 13pt;background:#F6BB12;color:#0A0A0A;font-weight:700;font-size:10pt;padding:6pt 14pt;border-radius:20pt;text-decoration:none}#printDoc a{color:inherit;text-decoration:none}}
 `;
   document.head.appendChild(css);
@@ -62,12 +67,14 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
   }
   function renderGate() {
     const g = gateCard(); if (!g || g.classList.contains('done')) return;
+    if (g.dataset.lang === state.lang && g.querySelector('#gateForm')) return;   // nicht neu aufbauen: sonst gehen Eingaben verloren
+    g.dataset.lang = state.lang;
     const pot = G.mk && G.mk.potential, cur = G.mk && G.mk.currency || 'CHF', n = (D.actions || []).length;
     g.innerHTML = `<div><h2>${L('Dein Plan ist fertig. Wohin sollen wir ihn schicken?', 'Your plan is ready. Where should we send it?')}</h2>
       ${pot ? `<p class="money">${L('Dein Inserat lässt geschätzt', 'Your listing leaves an estimated')} ${cur} <i>${String(pot).replace(/\d/g, '8').replace(/\B(?=(\d{3})+(?!\d))/g, '’')}</i> ${L('pro Jahr liegen.', 'a year on the table.')}</p>` : ''}
       <p>${L('Du siehst oben, was auffällt. Im Report steht, was du dagegen tust:', 'Above you see what stands out. The report shows what to do about it:')}</p>
       <ul><li>${L(`Alle ${n} Maßnahmen mit fertigen Texten`, `All ${n} actions with ready-made copy`)}</li><li>${L('Neuer Titel und neue Beschreibung', 'New title and description')}</li><li>${L('Foto-Reihenfolge und Ersetzen-Liste', 'Photo order and replace list')}</li><li>${L('Marktvergleich mit den drei Besten im Umkreis', 'Market comparison with the three best nearby')}</li><li>${L('Alles als PDF per E-Mail', 'All of it as a PDF by email')}</li></ul></div>
-      <form id="gateForm" novalidate><input id="gMail" type="email" autocomplete="email" inputmode="email" placeholder="${L('Deine E-Mail-Adresse', 'Your email address')}" aria-label="${L('E-Mail-Adresse', 'Email address')}"><label class="chk"><input id="gConsent" type="checkbox"><span>${L('Ich möchte den Report per E-Mail erhalten und bin einverstanden, dass Elev8 mich dazu kontaktiert.', 'I want to receive the report by email and agree that Elev8 contacts me about it.')}</span></label><button class="btn primary" type="submit" id="gBtn">${L('Report freischalten', 'Unlock report')}</button><div class="err" id="gErr" role="alert"></div></form>`;
+      <form id="gateForm" novalidate><input id="gMail" type="email" autocomplete="email" inputmode="email" placeholder="${L('Deine E-Mail-Adresse', 'Your email address')}" aria-label="${L('E-Mail-Adresse', 'Email address')}"><label class="gcons"><input id="gConsent" type="checkbox"><span>${L('Ich möchte den Report per E-Mail erhalten und bin einverstanden, dass Elev8 mich dazu kontaktiert.', 'I want to receive the report by email and agree that Elev8 contacts me about it.')}</span></label><button class="btn primary" type="submit" id="gBtn">${L('Report freischalten', 'Unlock report')}</button><div class="err" id="gErr" role="alert"></div></form>`;
     if (!G.viewed) { G.viewed = true; ev('gate_view', { score: Math.round(overall()) }); }
   }
   function lockCards() {
@@ -104,7 +111,7 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail) || !document.getElementById('gConsent').checked) { err.textContent = L('Bitte E-Mail prüfen und der Zusendung zustimmen.', 'Please check your email and agree to receive it.'); ev('gate_error', { zone: 'input' }); return; }
     ev('gate_submit'); btn.disabled = true; btn.textContent = L('Wird gesendet …', 'Sending …');
     let base = {}; try { base = leadPayload() || {}; } catch (x) { }
-    const p = { ...base, email: mail, consent: { given: true, at: new Date().toISOString(), text: document.querySelector('#gateForm .chk span').textContent }, report: { id: G.id, lang: state.lang }, sid, gate: true, view: 'prospect', lang: state.lang, openedAreas: Array.from(state.clicks || []).slice(0, 40) };
+    const p = { ...base, email: mail, consent: { given: true, at: new Date().toISOString(), text: document.querySelector('#gateForm .gcons span').textContent }, report: { id: G.id, lang: state.lang }, sid, gate: true, view: 'prospect', lang: state.lang, openedAreas: Array.from(state.clicks || []).slice(0, 40) };
     try {
       const r = await fetch('/api/lead', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }), j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error || r.status);
