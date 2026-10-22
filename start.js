@@ -7,6 +7,7 @@ import { salvageJson } from './report.js';
 import { generateReportV2 } from './engine.js';
 import { marketFor } from './market.js';
 import { createLeads } from './leads.js';
+import { patchPage } from './patch.js';
 
 // Der Scraper setzt max_tokens fest auf 8000. Mit Nachdenken wird die Foto-Antwort dann abgeschnitten.
 const realFetch = globalThis.fetch;
@@ -35,7 +36,7 @@ const uiHtml = read('./ui.html') || '';
 const liveJs = (f) => read('./' + f) || '';
 const injectLive = (h) => (h.includes('/live.js') ? h : h.replace('</body>', '<script src="/live.js"></script><script src="/live2.js"></script><script src="/gate.js"></script></body>'));
 const BK_OLD = "const BOOKING_URL = 'https://elev8-suite.com';";   // Platzhalter in der Seite, wird mit BOOKING_URL aus Railway ersetzt
-const pageHtml = () => injectLive(read('./public/index.html') || '<!doctype html><meta charset="utf-8"><title>Listing Health</title><p style="font:16px system-ui;padding:40px">Die Seite ist noch nicht hochgeladen (public/index.html fehlt).</p>').replace(BK_OLD, () => (process.env.BOOKING_URL ? `const BOOKING_URL = ${JSON.stringify(process.env.BOOKING_URL)};` : BK_OLD));
+const pageHtml = () => patchPage(injectLive(read('./public/index.html') || '<!doctype html><meta charset="utf-8"><title>Listing Health</title><p style="font:16px system-ui;padding:40px">Die Seite ist noch nicht hochgeladen (public/index.html fehlt).</p>').replace(BK_OLD, () => (process.env.BOOKING_URL ? `const BOOKING_URL = ${JSON.stringify(process.env.BOOKING_URL)};` : BK_OLD)));
 
 /* ---- Hilfen ---- */
 const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
