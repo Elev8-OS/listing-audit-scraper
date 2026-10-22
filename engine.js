@@ -1,4 +1,4 @@
-// Befund-Motor v2: drei kleinere KI-Aufrufe (Befund, Maßnahmen, Texte), geprüft, mit festen Sichtbarkeits-Signalen und Ausstattungs-Abgleich.
+// Befund-Motor v2: zwei kleinere KI-Aufrufe (Analyse, Texte), geprüft, mit festen Sichtbarkeits-Signalen und Ausstattungs-Abgleich.
 import { prepare, normalize, salvageJson } from './report.js';
 const MODEL = process.env.REPORT_MODEL || process.env.PHOTO_MODEL || 'claude-sonnet-5-5';
 const BASE = process.env.ANTHROPIC_BASE || 'https://api.anthropic.com';
@@ -24,11 +24,11 @@ const SA2 = `{
 const SB = `{
  "titles": [ {"text": "höchstens 50 Zeichen", "note": "warum"} ],   // genau 3 Varianten A, B, C. Zähle die Zeichen nach. Nenne Gästezahl oder Ausstattung und die echte Lage.
  "recommendedTitle": "A|B|C",
- "descAfter": "neue Beschreibung, 500-900 Zeichen, Absätze und '• '-Aufzählung, nur belegte Fakten, Unsicheres in [eckigen Klammern]"
+ "descAfter": "neue Beschreibung, 500-900 Zeichen, Absätze und '• '-Aufzählung (nur für Vorzüge), nur belegte Fakten, keine Zitate, Unsicheres in [eckigen Klammern]"
 }`;
 const promptA1 = (f, L) => `Du bist ein erfahrener Revenue-Manager für Kurzzeitvermietung und prüfst ein Airbnb-Inserat. Erstelle den Befund (Bereiche und Widersprüche) des Listing-Health-Berichts. Fasse dich kurz.\n\n${RULES(L)}\n- base-Werte: 90+ exzellent, 70-89 solide, 50-69 deutliche Lücken, unter 50 schwach. Begründe jeden Wert mit Belegen in evidence.\n- photos: stütze dich auf photoAnalysis. reviews: stütze dich auf Bewertungen, Kategorien und Zeitverlauf.\n- amenityCheck (gelistet, aber auf keinem Foto) ist bereits berechnet: wiederhole es nicht in gaps. Prüfe in amenityNotes nur, was auf den Fotos zu sehen ist und nicht in der Liste steht, und Widersprüche zwischen Beschreibung und Liste.\n\nANTWORT: ausschließlich gültiges JSON in dieser Form (Kommentare nicht ausgeben):\n${SA1}\n\nDATEN:\n${JSON.stringify(f)}`;
 const promptA2 = (f, L) => `Du bist ein erfahrener Revenue-Manager für Kurzzeitvermietung und prüfst ein Airbnb-Inserat. Erstelle den Maßnahmenplan. Fasse dich kurz.\n\n${RULES(L)}\n- Nur Maßnahmen, die sich aus den Daten ableiten. Keine Maßnahme zum Fotografieren gelisteter Ausstattung (amenityCheck wird separat behandelt).\n- ota=true nur für Änderungen im Inserat (Titel, Text, Fotos, Ausstattung, Regeln). tag=elev8 für Automatisierungen wie Bewertungsbitte.\n\nANTWORT: ausschließlich gültiges JSON in dieser Form (Kommentare nicht ausgeben):\n${SA2}\n\nDATEN:\n${JSON.stringify(f)}`;
-const promptB = (f, L) => `Du bist ein erfahrener Texter für Kurzzeitvermietung. Schreibe für dieses Airbnb-Inserat drei neue Titel und eine neue Beschreibung.\n\n${RULES(L)}\n- Titel: höchstens 50 Zeichen, zähle nach. Keine falschen Ortsangaben.\n- Die Beschreibung ist besser als die heutige: konkret, mit echten Ausstattungen, ehrlich zu Schwächen aus Bewertungen (zum Beispiel Lärm), ohne Werbefloskeln.\n\nANTWORT: ausschließlich gültiges JSON in dieser Form (Kommentare nicht ausgeben):\n${SB}\n\nDATEN:\n${JSON.stringify(f)}`;
+const promptB = (f, L) => `Du bist ein erfahrener Texter für Kurzzeitvermietung. Schreibe für dieses Airbnb-Inserat drei neue Titel und eine neue Beschreibung.\n\n${RULES(L)}\n- Titel: höchstens 50 Zeichen, zähle nach. Keine falschen Ortsangaben.\n- Die Beschreibung ist besser als die heutige: konkret, mit echten Ausstattungen, warm und einladend, ohne Werbefloskeln.\n- Schwächen aus den Bewertungen (zum Beispiel Lärm) nicht hart formulieren: kein Nachteile-Block, keine Aufzählung von Mängeln, kein „kein/keine/ohne“ als Aufhänger, nichts Negatives in den Titeln. Erwähne eine Schwäche höchstens einmal, sachlich und freundlich mit Einordnung, und nur dort, wo sie Gästen bei der Entscheidung hilft (zum Beispiel „Die Schlafzimmer liegen zum ruhigen Innenhof“, nur wenn die Daten es belegen). Verschweige nichts, was Gäste vor der Buchung wissen müssen.\n- Keine Zitate: weder von Gastgebern noch von Gästen, keine wörtliche Rede, keine Bewertungsauszüge, kein „Gäste schreiben“ oder „laut Bewertungen“. Formuliere alles direkt als Aussage über die Unterkunft.\n\nANTWORT: ausschließlich gültiges JSON in dieser Form (Kommentare nicht ausgeben):\n${SB}\n\nDATEN:\n${JSON.stringify(f)}`;
 
 async function ask(prompt, key, tag) {
   const t0 = Date.now(), r = await fetch(`${BASE}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: MODEL, max_tokens: 16000, messages: [{ role: 'user', content: prompt }] }), signal: AbortSignal.timeout(150000) });
@@ -92,7 +92,7 @@ function addAmenity(rep, chk, notes, d, photoRes, L) {
   if (vis.length && acts.length < 14) {
     const id = nid(), items = list(vis.map((x) => x.item), 4);
     acts.push({ id, cat: 'consistency', t: en ? `Name what the photos show but the amenities don’t: ${items}` : `Nennen, was die Fotos zeigen und die Ausstattung nicht: ${items}`, min: 10, effort: en ? '10 min' : '10 Min', impact: 'Mittel', gain: 3,
-      why: en ? 'These features are clearly visible in the photos but are not in the amenities list. Guests only notice them if they open every photo.' : 'Diese Merkmale sind auf den Fotos klar zu sehen, stehen aber nicht in der Ausstattungsliste. Gäste bemerken sie nur, wenn sie jedes Foto öffnen.',
+      why: en ? 'These features are clearly visible in the photos but appear neither in the amenities list. Guests only notice them if they open every photo.' : 'Diese Merkmale sind auf den Fotos klar zu sehen, stehen aber nicht in der Ausstattungsliste. Gäste bemerken sie nur, wenn sie jedes Foto öffnen.',
       how: en ? 'Add them to the amenities where Airbnb offers a matching item, otherwise mention them in the description.' : 'In die Ausstattung aufnehmen, wo Airbnb einen passenden Punkt anbietet, sonst in der Beschreibung nennen.', ota: true });
     rep.gaps.push({ says: en ? 'Amenities list' : 'Ausstattungsliste', real: (en ? 'Visible in photos: ' : 'Auf Fotos zu sehen: ') + vis.map((x) => x.photos.length ? `${x.item} (${en ? 'photo' : 'Foto'} ${x.photos.join(', ')})` : x.item).join(', '), fix: en ? 'Name them in the amenities or the description.' : 'In Ausstattung oder Beschreibung nennen.', cat: 'consistency', act: id });
     cc.evidence.push((en ? 'Visible in photos, not in the amenities: ' : 'Auf Fotos zu sehen, nicht in der Ausstattung: ') + list(vis.map((x) => x.item), 4));
@@ -110,7 +110,8 @@ export async function generateReportV2(d, photoRes, lang, key) {
   const L = lang === 'en' ? 'en' : 'de', chk = amenityCheck(photoRes), f = prepare(d, photoRes);
   f.amenityCheck = chk;
   f.photoShows = photoRes && photoRes.analysis && Array.isArray(photoRes.analysis.photos) ? photoRes.analysis.photos.map((p) => ({ n: p.position, room: p.room, shows: p.shows })) : null;
-  const fB = { ...f, reviews: (f.reviews || []).slice(0, 15), photoShows: null }, fA2 = { ...f, photoShows: null };
+  const fB = { ...f, reviews: (f.reviews || []).slice(0, 15), photoShows: null };
+  const fA2 = { ...f, photoShows: null };
   const [A, A2, B] = await Promise.all([until(promptA1(f, L), okA1, key, 'Bereiche fehlen', 'befund'), until(promptA2(fA2, L), okA2, key, 'Maßnahmen fehlen', 'plan'), until(promptB(fB, L), okB, key, 'Titel länger als 50 Zeichen oder Beschreibung fehlt', 'text')]);
   if (!okA1(A)) throw new Error('Der Befund war unvollständig. Bitte später erneut versuchen.');
   if (!okA2(A2)) throw new Error('Der Maßnahmenplan war unvollständig. Bitte später erneut versuchen.');
