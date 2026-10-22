@@ -1,6 +1,6 @@
 // Befund-Motor v2: zwei kleinere KI-Aufrufe (Analyse, Texte), geprüft, mit festen Sichtbarkeits-Signalen und Ausstattungs-Abgleich.
 import { prepare, normalize, salvageJson } from './report.js';
-export const PROMPT_VERSION = 'v5';   // bei jeder Aenderung der Prompts hochzaehlen: gespeicherte Reports werden dann neu erzeugt
+export const PROMPT_VERSION = 'v6';   // bei jeder Aenderung der Prompts hochzaehlen: gespeicherte Reports werden dann neu erzeugt
 const MODEL = process.env.REPORT_MODEL || process.env.PHOTO_MODEL || 'claude-sonnet-5-5';
 const BASE = process.env.ANTHROPIC_BASE || 'https://api.anthropic.com';
 const len = (s) => [...String(s || '')].length;
@@ -29,7 +29,7 @@ const SB = `{
 }`;
 const promptA1 = (f, L) => `Du bist ein erfahrener Revenue-Manager für Kurzzeitvermietung und prüfst ein Airbnb-Inserat. Erstelle den Befund (Bereiche und Widersprüche) des Listing-Health-Berichts. Fasse dich kurz.\n\n${RULES(L)}\n- base-Werte: 90+ exzellent, 70-89 solide, 50-69 deutliche Lücken, unter 50 schwach. Begründe jeden Wert mit Belegen in evidence.\n- photos: stütze dich auf photoAnalysis. reviews: stütze dich auf Bewertungen, Kategorien und Zeitverlauf.\n- amenityCheck (gelistet, aber auf keinem Foto) ist bereits berechnet: wiederhole es nicht in gaps. Prüfe in amenityNotes nur, was auf den Fotos zu sehen ist und nicht in der Liste steht, und Widersprüche zwischen Beschreibung und Liste.\n\nANTWORT: ausschließlich gültiges JSON in dieser Form (Kommentare nicht ausgeben):\n${SA1}\n\nDATEN:\n${JSON.stringify(f)}`;
 const promptA2 = (f, L) => `Du bist ein erfahrener Revenue-Manager für Kurzzeitvermietung und prüfst ein Airbnb-Inserat. Erstelle den Maßnahmenplan. Fasse dich kurz.\n\n${RULES(L)}\n- Nur Maßnahmen, die sich aus den Daten ableiten. Keine Maßnahme zum Fotografieren gelisteter Ausstattung (amenityCheck wird separat behandelt).\n- ota=true nur für Änderungen im Inserat (Titel, Text, Fotos, Ausstattung, Regeln). tag=elev8 für Automatisierungen wie Bewertungsbitte.\n\nANTWORT: ausschließlich gültiges JSON in dieser Form (Kommentare nicht ausgeben):\n${SA2}\n\nDATEN:\n${JSON.stringify(f)}`;
-const promptB = (f, L) => `Du bist ein erfahrener Texter für Kurzzeitvermietung. Schreibe für dieses Airbnb-Inserat drei neue Titel und eine neue Beschreibung. Ziel: Gäste bekommen ein gutes Gefühl und möchten buchen.\n\n${RULES(L)}\n- Ehrlich: Nutze nur Fakten aus den DATEN (Ausstattung, Räume, Betten, Lage, bestehender Text). Nichts erfinden, nichts übertreiben, keine Superlative ohne Beleg.\n- Rein positiv und einladend: beschreibe, was Gäste bekommen und wie es sich anfühlt. Keine Nachteile und Einschränkungen, kein „kein/keine/ohne/leider/nur“, kein Hinweisblock mit Mängeln. Praktische Fakten (zum Beispiel Stockwerk, Lift, Check-in) nennst du neutral als Information oder Vorzug.\n- Bewertungen sind tabu: nichts aus Bewertungen, keine Noten, Sterne oder Bewertungszahlen, kein „Gäste lieben“ und kein „Guest Favorite“. Keine Zitate von Gastgebern oder Gästen, keine wörtliche Rede.\n- Titel: höchstens 50 Zeichen, zähle nach. Gästezahl oder Ausstattung und die echte Lage, einladend, keine falschen Ortsangaben.\n- Beschreibung: 500 bis 900 Zeichen. Zuerst ein einladender Einstieg in 1 bis 2 Sätzen, dann eine kurze '• '-Liste der Vorzüge, am Ende ein freundlicher Schlusssatz. Konkret statt Werbefloskeln wie „exquisit“, „einzigartig“ oder „unvergesslich“.\n\nANTWORT: ausschließlich gültiges JSON in dieser Form (Kommentare nicht ausgeben):\n${SB}\n\nDATEN:\n${JSON.stringify(f)}`;
+const promptB = (f, L) => `Du bist ein erfahrener Texter für Kurzzeitvermietung. Schreibe für dieses Airbnb-Inserat drei neue Titel und eine neue Beschreibung. Ziel: Gäste bekommen ein gutes Gefühl und möchten buchen.\n\n${RULES(L)}\n- Ehrlich: Nutze nur Fakten aus den DATEN (Ausstattung, Räume, Betten, Lage, bestehender Text). Nichts erfinden, nichts übertreiben, keine Superlative ohne Beleg.\n- Rein positiv und einladend: beschreibe, was Gäste bekommen und wie es sich anfühlt. Keine Nachteile und Einschränkungen, kein „kein/keine/ohne/leider/nur“, kein Hinweisblock mit Mängeln. Praktische Fakten (zum Beispiel Stockwerk, Lift, Check-in) nennst du neutral als Information oder Vorzug.\n- Bewertungen sind tabu: nichts aus Bewertungen, keine Noten, Sterne oder Bewertungszahlen, kein „Gäste lieben“ und kein „Guest Favorite“. Keine Zitate von Gastgebern oder Gästen, keine wörtliche Rede.\n- Titel: höchstens 50 Zeichen, zähle nach. Gästezahl oder Ausstattung und die echte Lage, einladend, keine falschen Ortsangaben.\n- Schlafzimmer: Nenne nur Räume mit echtem Bett als Schlafzimmer. Steht in bedroomFacts, dass ein Raum nur ein Schlafsofa hat, nennst du nie die gelistete Zahl, sondern schreibst zum Beispiel „2 Schlafzimmer und Schlafsofa“ oder nennst nur die Gästezahl.\n- Beschreibung: 500 bis 900 Zeichen. Zuerst ein einladender Einstieg in 1 bis 2 Sätzen, dann eine kurze '• '-Liste der Vorzüge, am Ende ein freundlicher Schlusssatz. Konkret statt Werbefloskeln wie „exquisit“, „einzigartig“ oder „unvergesslich“.\n\nANTWORT: ausschließlich gültiges JSON in dieser Form (Kommentare nicht ausgeben):\n${SB}\n\nDATEN:\n${JSON.stringify(f)}`;
 
 async function ask(prompt, key, tag) {
   const t0 = Date.now(), r = await fetch(`${BASE}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: MODEL, max_tokens: 16000, messages: [{ role: 'user', content: prompt }] }), signal: AbortSignal.timeout(150000) });
@@ -104,14 +104,45 @@ function addAmenity(rep, chk, notes, d, photoRes, L) {
   rep.amenityCheck = out;
 }
 
+/* ---- Schlafzimmer, die nur ein Schlafsofa haben ---- */
+const SOFA = /(sofa\s*-?\s*bed|bed\s*-?\s*sofa|couch\s*bed|sleeper\s*sofa|pull-?out\s*(sofa|couch|bed)?|air\s*mattress|day\s*bed|schlafcouch|schlafsofa|bettsofa|sofa\s*-?\s*bett|sofabett|couch|sofa|futon|ausziehbar|luftmatratze|sleeper|tagesbett)/ig;
+const REAL_BED = /(queen|king|doppel|double|einzel|single|twin|etagen|bunk|kinderbett|babybett|crib|\bcot\b|\bbett\b|\bbed\b)/i;
+export function bedroomCheck(d) {
+  const rooms = (Array.isArray(d && d.sleeping) ? d.sleeping : []).filter((x) => /schlafzimmer|bedroom|schlafraum/i.test(String((x && x.room) || '')));
+  const odd = rooms.filter((x) => { const parts = String(x.beds || '').split(/,|·|\+|\bund\b|\band\b/i).map((p) => p.trim()).filter(Boolean); return parts.length > 0 && parts.every((p) => { const rest = p.replace(SOFA, ' '); return rest !== p && !REAL_BED.test(rest); }); }).map((x) => ({ room: String(x.room), beds: String(x.beds || '') }));
+  return { listed: rooms.length, real: rooms.length - odd.length, odd };
+}
+const NUMW = { 2: 'zwei', 3: 'drei', 4: 'vier', 5: 'f\u00fcnf', 6: 'sechs' };
+export function fixBedroomClaims(text, bc) {   // aus "3 Schlafzimmer" wird "2 Schlafzimmer", wenn eines davon nur ein Schlafsofa hat
+  if (!text || !bc || !bc.odd.length || bc.listed === bc.real) return text;
+  const nw = NUMW[bc.listed], rw = NUMW[bc.real] || String(bc.real);
+  let t = String(text).replace(new RegExp(`\\b${bc.listed}(\\s*[- ]?\\s*)(Schlafzimmer|bedrooms?|Schlafr\u00e4ume)`, 'gi'), (m, sp, w) => `${bc.real}${sp}${w}`);
+  if (nw) t = t.replace(new RegExp(`\\b${nw}(\\s*[- ]?\\s*)(Schlafzimmer|Schlafr\u00e4ume|bedrooms?)`, 'gi'), (m, sp, w) => `${rw}${sp}${w}`);
+  return t;
+}
+function addBedrooms(rep, bc, d, L) {
+  if (!bc.odd.length) return;
+  const en = L === 'en', o = bc.odd[0], more = bc.odd.length > 1, acts = rep.actions, id = 'a' + (acts.length + 1), cc = rep.cats.find((c) => c.id === 'consistency');
+  const titleClaims = new RegExp(`\\b${bc.listed}\\s*[- ]?\\s*(Schlafzimmer|bedrooms?)`, 'i').test(String(d.title || '')), q = (x) => (en ? `\u201c${x}\u201d` : `\u201e${x}\u201c`);
+  acts.push({ id, cat: 'consistency', t: en ? `Name ${q(o.room)} honestly: living area with a sofa bed` : `${q(o.room)} ehrlich benennen: Wohnbereich mit Schlafsofa`, min: 5, effort: en ? '5 min' : '5 Min', impact: 'Mittel', gain: 6,
+    why: en ? `${q(o.room)} only has ${o.beds}. Guests expect a real bed in its own room and are disappointed on arrival.` : `${q(o.room)} hat laut Betten-Angabe nur ${o.beds}. G\u00e4ste erwarten ein richtiges Bett in einem eigenen Raum und sind bei der Ankunft entt\u00e4uscht.`,
+    how: en ? `List it as living room with a sofa bed, say ${bc.real} bedrooms in title and description and mention the sofa bed as an extra sleeping place.` : `Als Wohnzimmer mit Schlafsofa f\u00fchren, im Titel und in der Beschreibung ${bc.real} Schlafzimmer nennen und das Schlafsofa als zus\u00e4tzlichen Schlafplatz erw\u00e4hnen.`, ota: true });
+  rep.gaps.unshift({ says: en ? `Listing: ${q(bc.listed + ' bedrooms')}${titleClaims ? ' (also in the title)' : ''}` : `Inserat: ${q(bc.listed + ' Schlafzimmer')}${titleClaims ? ' (auch im Titel)' : ''}`,
+    real: en ? `${q(o.room)} only has ${o.beds}${more ? `, same for ${bc.odd.length - 1} more` : ''}. That is a living area with a place to sleep, not a bedroom.` : `${q(o.room)} hat nur ${o.beds}${more ? `, bei ${bc.odd.length - 1} weiteren ebenso` : ''}. Das ist ein Wohnbereich mit Schlafgelegenheit, kein Schlafzimmer.`,
+    fix: en ? `Say ${bc.real} bedrooms and list the sofa bed as an extra sleeping place.` : `${bc.real} Schlafzimmer nennen und das Schlafsofa als zus\u00e4tzlichen Schlafplatz f\u00fchren.`, cat: 'consistency', act: id });
+  if (cc) { cc.evidence.unshift(en ? `${q(o.room)} has only ${o.beds}, listed as a bedroom` : `${q(o.room)} hat nur ${o.beds}, ist aber als Schlafzimmer gelistet`); if (cc.base != null) cc.base = Math.max(40, cc.base - 10); }
+  rep.titles.forEach((t) => { t.text = fit(fixBedroomClaims(t.text, bc)); });
+  rep.descAfter = fixBedroomClaims(rep.descAfter, bc);
+}
+
 export async function generateReportV2(d, photoRes, lang, key) {
   if (!key) throw Object.assign(new Error('ANTHROPIC_API_KEY fehlt'), { status: 503 });
   const ps = photoScore(photoRes);
   if (ps != null) photoRes = { ...photoRes, analysis: { ...photoRes.analysis, overall: { ...(photoRes.analysis.overall || {}), score: ps } } };   // gleiche Foto-Note wie auf der Seite: Durchschnitt der Einzelwerte
-  const L = lang === 'en' ? 'en' : 'de', chk = amenityCheck(photoRes), f = prepare(d, photoRes);
+  const L = lang === 'en' ? 'en' : 'de', chk = amenityCheck(photoRes), f = prepare(d, photoRes), bc = bedroomCheck(d);
   f.amenityCheck = chk;
   f.photoShows = photoRes && photoRes.analysis && Array.isArray(photoRes.analysis.photos) ? photoRes.analysis.photos.map((p) => ({ n: p.position, room: p.room, shows: p.shows })) : null;
-  const fB = { listingTitle: f.listingTitle, descriptionText: f.descriptionText, highlights: f.highlights, sleepingArrangements: f.sleepingArrangements, amenitiesAvailable: f.amenitiesAvailable, neighborhoodText: f.neighborhoodText, photoCount: f.photoCount };   // Textvorschlaege: nur Fakten zum Angebot, nichts aus Bewertungen, keine fehlende Ausstattung
+  const fB = { listingTitle: f.listingTitle, descriptionText: f.descriptionText, highlights: f.highlights, sleepingArrangements: f.sleepingArrangements, amenitiesAvailable: f.amenitiesAvailable, neighborhoodText: f.neighborhoodText, photoCount: f.photoCount, ...(bc.odd.length ? { bedroomFacts: { gelisteteSchlafzimmer: bc.listed, schlafzimmerMitEchtemBett: bc.real, raeumeNurMitSchlafsofa: bc.odd } } : {}) };   // Textvorschlaege: nur Fakten zum Angebot, nichts aus Bewertungen, keine fehlende Ausstattung
   const fA2 = { ...f, photoShows: null };
   const [A, A2, B] = await Promise.all([until(promptA1(f, L), okA1, key, 'Bereiche fehlen', 'befund'), until(promptA2(fA2, L), okA2, key, 'Maßnahmen fehlen', 'plan'), until(promptB(fB, L), okB, key, 'Titel länger als 50 Zeichen oder Beschreibung fehlt', 'text')]);
   if (!okA1(A)) throw new Error('Der Befund war unvollständig. Bitte später erneut versuchen.');
@@ -120,6 +151,7 @@ export async function generateReportV2(d, photoRes, lang, key) {
   B.titles = B.titles.slice(0, 3).map((t) => ({ ...t, text: fit(t && t.text) }));
   const rep = normalize({ ...A, ...A2, ...B }, d, photoRes, L);
   rep.gaps.forEach((g) => { const a = rep.actions.find((x) => x.cat === g.cat); g.act = a ? a.id : 'a1'; });
+  addBedrooms(rep, bc, d, L);
   rep.vis = buildVis(f, photoRes, L);
   const rec = rep.titles.find((t) => t.rec);
   if (rec && rep.actions[0] && !rep.actions[0].copy) rep.actions[0].copy = rec.text;
