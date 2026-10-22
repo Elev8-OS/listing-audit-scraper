@@ -3,7 +3,20 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { generateReport } from './report.js';
+import { generateReport, salvageJson } from './report.js';
+
+// Der Scraper setzt max_tokens fest auf 8000. Mit Nachdenken wird die Foto-Antwort dann abgeschnitten.
+const realFetch = globalThis.fetch;
+globalThis.fetch = (input, init) => {
+  try {
+    const u = typeof input === 'string' ? input : (input && input.url) || '';
+    if (u.startsWith('https://api.anthropic.com/v1/messages') && init && typeof init.body === 'string') {
+      const b = JSON.parse(init.body);
+      if (b.max_tokens && b.max_tokens < 12000) { b.max_tokens = 12000; init = { ...init, body: JSON.stringify(b) }; }
+    }
+  } catch {}
+  return realFetch(input, init);
+};
 
 const PORT = Number(process.env.PORT || 3000);
 const API_KEY = process.env.API_KEY || '';
@@ -42,6 +55,30 @@ const local = async (p) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const strip = (u) => String(u || '').split('?')[0];
 
+/* ---- Foto-Analyse absichern: abgeschnittene Antworten retten, Gesamtnote ergänzen ---- */
+const q4 = (p) => (p.brightness + p.sharpness + p.composition + p.tidiness) / 4;
+function completeAnalysis(a) {
+  const ph = Array.isArray(a.photos) ? a.photos : [], ok = ph.filter((p) => [p.brightness, p.sharpness, p.composition, p.tidiness].every(Number.isFinite));
+  if (!a.overall && ok.length) {
+    const avg = ok.reduce((s, p) => s + q4(p), 0) / ok.length, score = Math.round(avg * 20), grade = score >= 85 ? 'A' : score >= 75 ? 'B' : score >= 65 ? 'C' : score >= 55 ? 'D' : score >= 45 ? 'E' : 'F';
+    const weak = ph.filter((p) => p.keep === false).map((p) => p.position), fixes = [];
+    if (a.cover && a.cover.betterPosition && a.cover.betterPosition !== a.cover.position) fixes.push(`Titelbild wechseln: Foto ${a.cover.betterPosition} statt Foto ${a.cover.position}`);
+    if (weak.length) fixes.push(`${weak.length} schwache Fotos ersetzen oder streichen (Fotos ${weak.join(', ')})`);
+    const cnt = {}; ph.forEach((p) => (p.issues || []).forEach((i) => { const k = String(i).trim(); cnt[k] = (cnt[k] || 0) + 1; }));
+    const top = Object.entries(cnt).sort((x, y) => y[1] - x[1])[0]; if (top && top[1] >= 3) fixes.push(`Wiederkehrendes Problem beheben: ${top[0]} (${top[1]} Fotos)`);
+    const few = (a.roomCoverage || []).filter((r) => r.verdict === 'zu wenig').map((r) => r.room); if (few.length) fixes.push(`Mehr Fotos von: ${few.join(', ')}`);
+    a.overall = { score, grade, summary: `Ø Bildqualität ${avg.toFixed(1)} von 5. ${weak.length} von ${ph.length} Fotos sollten ersetzt oder gestrichen werden.`, topFixes: fixes.slice(0, 4) };
+    a.partial = true;
+  }
+  if (!Array.isArray(a.missingMotifs)) a.missingMotifs = [];
+  return a;
+}
+function getAnalysis(j) {
+  if (!j) return null;
+  const a = j.analysis || salvageJson(j.raw);
+  return a && Array.isArray(a.photos) && a.photos.length ? completeAnalysis(a) : null;
+}
+
 /* ---- Lead-Eingang ---- */
 async function handleLead(req, res) {
   if (limited('lead:' + ipOf(req), 5, 3600e3)) return json(res, 429, { ok: false, error: 'Zu viele Anfragen. Bitte später erneut versuchen.' });
@@ -72,10 +109,10 @@ async function steps(id, url, j) {
       if (!ok) throw new Error('Das Lesen des Inserats dauert zu lange');
     }
     j.step = 'photos';
-    let done = false;
+    let done = false, refreshed = false;
     for (let i = 0; i < 90 && !done; i++) {
       const r = await local(`/analyze-photos?id=${id}&async=1`);
-      if (r.status === 200) done = true;
+      if (r.status === 200) { if (getAnalysis(r.json)) done = true; else if (!refreshed) { refreshed = true; await local(`/analyze-photos?id=${id}&async=1&refresh=1`); await sleep(6000); } else throw new Error('Foto-Analyse fehlgeschlagen'); }
       else if (r.status >= 400) throw new Error((r.json && r.json.error) || 'Foto-Analyse fehlgeschlagen');
       else if (r.json && r.json.lastError) throw new Error('Foto-Analyse fehlgeschlagen');
       else await sleep(6000);
@@ -99,9 +136,9 @@ async function runReport(id, url, lang, j) {
   try {
     if (j.step !== 'report') await steps(id, url, j);
     j.step = 'report';
-    const [full, ph] = await Promise.all([local(`/cached?id=${id}`), local(`/analyze-photos?id=${id}`)]);
+    const [full, pc] = await Promise.all([local(`/cached?id=${id}`), result(id)]);
     if (full.status !== 200) throw new Error('Das Inserat konnte nicht gelesen werden');
-    const rep = await generateReport(full.json, ph.json, lang, process.env.ANTHROPIC_API_KEY || '');
+    const rep = await generateReport(full.json, pc ? { analysis: pc.analysis } : null, lang, process.env.ANTHROPIC_API_KEY || '');
     const k = `${id}:${lang}`; reports.set(k, { at: Date.now(), report: rep });
     try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(repFile(k), JSON.stringify(rep)); } catch {}
     j.status = 'done';
@@ -127,9 +164,10 @@ async function handleReport(req, res, u) {
 }
 async function result(id) {
   const [d, a] = await Promise.all([local(`/cached?id=${id}&slim=1`), local(`/analyze-photos?id=${id}`)]);
-  if (d.status !== 200 || a.status !== 200 || !a.json || !a.json.analysis) return null;
+  const analysis = a.status === 200 ? getAnalysis(a.json) : null;
+  if (d.status !== 200 || !analysis) return null;
   const photos = (d.json.photos || []).map((p) => ({ position: p.position, caption: p.caption || null, thumb: `${strip(p.url)}?im_w=480`, full: `${strip(p.url)}?im_w=1200` }));
-  return { title: d.json.title || null, rating: d.json.rating ?? null, reviewCount: d.json.reviewCount ?? null, photoCount: photos.length, photos, analyzedAt: a.json.analyzedAt, coverUrl: a.json.coverUrl || null, analysis: a.json.analysis };
+  return { title: d.json.title || null, rating: d.json.rating ?? null, reviewCount: d.json.reviewCount ?? null, photoCount: photos.length, photos, analyzedAt: a.json.analyzedAt, coverUrl: a.json.coverUrl || null, analysis };
 }
 async function handlePhotoCheck(req, res, u) {
   if (!API_KEY) return json(res, 503, { ok: false, error: 'Dienst nicht konfiguriert' });
