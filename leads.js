@@ -43,7 +43,7 @@ export function createLeads(c) {
     const file = dir('pdf', `${rec.id}.pdf`), urls = { pdf: `${b}/r/${rec.token}.pdf`, go: `${b}/go/${rec.token}` };
     let pdfOk = false;
     if (rec.listingId) {
-      try { fs.mkdirSync(dir('pdf'), { recursive: true }); await renderPdf({ origin: `http://127.0.0.1:${PORT}`, url: `https://www.airbnb.de/rooms/${rec.listingId}`, lang: rec.lang, token: rec.token, out: file }); pdfOk = fs.existsSync(file); ev('pdf_ready', { sid: rec.id }); }
+      try { fs.mkdirSync(dir('pdf'), { recursive: true }); await renderPdf({ origin: `http://127.0.0.1:${PORT}`, base: b, url: `https://www.airbnb.de/rooms/${rec.listingId}`, lang: rec.lang, token: rec.token, out: file }); pdfOk = fs.existsSync(file); ev('pdf_ready', { sid: rec.id }); }
       catch (e) { ev('pdf_failed', { sid: rec.id }); console.error('PDF', rec.id, e.message); }
     }
     if (!ghl.ghlReady()) { ev('mail_skipped', { sid: rec.id }); console.log('GHL nicht konfiguriert (GHL_TOKEN fehlt): keine E-Mail gesendet an', rec.id); return; }
