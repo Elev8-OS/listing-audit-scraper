@@ -1,6 +1,16 @@
 // Lead-Magnet-Modus: blendet aus, was nicht zum Lead-Magneten gehört, und bereinigt Texte.
 // Wird beim Ausliefern auf die Seite angewendet, die Seitendatei selbst bleibt unverändert.
+const d = (x) => x.split('§{').join('${');   // § steht für das Dollarzeichen vor der geschweiften Klammer, damit der Quelltext lesbar bleibt
 const SWAPS = [
+  // Foto-Nummern: Auf jeder Kachel stehen beide Nummern, Airbnb und neue Position; Zahlen in Texten sind Airbnb-Nummern
+  [d('<img src="§{esc(ph.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer"><b class="pnum">§{i + 1}</b>'), d('<img src="§{esc(ph.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer"><b class="pnum">§{isEn() ? \'New\' : \'Neu\'} §{i + 1}</b><span class="pabn">Airbnb §{pos}</span>')],
+  [d('<li class="ptile" draggable="true" data-lp="§{pos}">'), d('<li class="ptile" draggable="true" data-lp="§{pos}" title="Airbnb §{pos} · §{isEn() ? \'New\' : \'Neu\'} §{i + 1}">')],
+  [d('<span class="small">§{esc(L.res.title || \'\')}</span></div>'), d('<span class="small">§{esc(L.res.title || \'\')}</span></div><p class="small">§{isEn() ? \'Each tile shows both numbers: Airbnb (current number in your listing) and New (position in the suggested order). Numbers in the texts, such as “Airbnb photo 4”, always refer to the Airbnb numbering.\' : \'Auf jeder Kachel siehst du beide Nummern: Airbnb (aktuelle Nummer im Inserat) und Neu (Platz in der vorgeschlagenen Reihenfolge). Zahlen in den Texten, zum Beispiel „Airbnb-Foto 4“, sind immer die Airbnb-Nummern.\'}</p>')],
+  ['Besser geeignet: Foto {0}', 'Besser geeignet: Airbnb-Foto {0}'], ['Better suited: photo {0}', 'Better suited: Airbnb photo {0}'],
+  // PDF: Foto-Reihenfolge mit beiden Nummern
+  [d('<div class="ph">§{a.map((e,t)=>{'), d('<p style="font-size:7.4pt;color:#555;margin:0 0 4pt">§{o("Gelber Kreis: neue Position. Weisse Marke: Nummer auf Airbnb. Zahlen in den Texten sind Airbnb-Nummern.","Yellow circle: new position. White tag: number on Airbnb. Numbers in the texts are Airbnb numbers.")}</p><div class="ph">§{a.map((e,t)=>{')],
+  [d('<span class="rk">§{t+1}</span></div><b>§{n(p.room||"")}</b>'), d('<span class="rk">§{t+1}</span><span class="ab">Airbnb §{e}</span></div><b>§{n(p.room||"")}</b>')],
+  ['.rk{background:#F6BB12;color:#0A0A0A}', '.rk{background:#F6BB12;color:#0A0A0A}.ab{position:absolute;right:3pt;bottom:3pt;background:#fff;color:#0A0A0A;border:.5pt solid #bbb;border-radius:7pt;padding:0 4pt;font-size:6.2pt;font-weight:700;line-height:10pt}'],
   // Textvorschläge folgen der gewählten Sprache (nicht der Sprache des Inserats)
   ['Die Vorschläge bleiben in der Sprache des Inserats (Deutsch).', 'Die Vorschläge sind in der gewählten Sprache geschrieben.'],
   ['Suggestions stay in the listing’s language (German).', 'Suggestions are written in the language you selected.'],
@@ -55,6 +65,7 @@ html.gated .rcard [data-x="print"],html.gated #cta{display:none!important}
 .e8btn{position:relative}
 .meta .e8chip{border:1.5px solid #F6BB12;background:#FEF4D6;color:#0A0A0A;cursor:pointer;font:inherit;font-weight:650;display:inline-flex;gap:6px;align-items:center}
 @media(hover:hover){.e8btn:not(.e8chip):hover::after,.e8btn:not(.e8chip):focus-visible::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 10px);left:50%;transform:translateX(-50%);width:max-content;max-width:270px;background:#0A0A0A;color:#fff;font-size:.78rem;font-weight:500;line-height:1.4;padding:9px 13px;border-radius:12px;white-space:normal;text-align:left;z-index:80;box-shadow:0 10px 30px -10px rgba(0,0,0,.5);pointer-events:none}}
+.pabn{position:absolute;left:8px;bottom:8px;height:22px;padding:0 9px;border-radius:99px;background:rgba(255,255,255,.94);color:#0A0A0A;font-size:.72rem;font-weight:700;display:grid;place-items:center;box-shadow:0 1px 5px rgba(0,0,0,.3);pointer-events:none}
 .e8usp{border:1.5px solid #F6BB12;background:linear-gradient(180deg,#FEF4D6,var(--card,#fff) 80%);margin:0 0 18px}
 .e8usp .h{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px;font-size:1.05rem}
 .e8usp p{margin:0 0 12px}
