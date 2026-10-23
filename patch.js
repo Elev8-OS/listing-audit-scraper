@@ -1,6 +1,9 @@
 // Lead-Magnet-Modus: blendet aus, was nicht zum Lead-Magneten gehört, und bereinigt Texte.
 // Wird beim Ausliefern auf die Seite angewendet, die Seitendatei selbst bleibt unverändert.
 const SWAPS = [
+  // Textvorschläge folgen der gewählten Sprache (nicht der Sprache des Inserats)
+  ['Die Vorschläge bleiben in der Sprache des Inserats (Deutsch).', 'Die Vorschläge sind in der gewählten Sprache geschrieben.'],
+  ['Suggestions stay in the listing’s language (German).', 'Suggestions are written in the language you selected.'],
   // [alt, neu]: gilt für Seite und Übersetzungstabelle gleichermaßen (deutscher Text ist der Schlüssel)
   ['value="https://www.airbnb.de/rooms/1175211811818785379"', 'placeholder="https://www.airbnb.de/rooms/…"'],
   ['Beispiel-Report mit echten Daten vom 21.10.2026. Beliebige Links live auszuwerten startet mit der Live-Anbindung.', 'Dauert etwa eine Minute. Link kopieren: Airbnb-App, Inserat öffnen, Teilen, Link kopieren.'],

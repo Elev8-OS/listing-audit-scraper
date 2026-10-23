@@ -90,21 +90,28 @@ const LG = createLeads({ DATA_DIR, API_KEY, PORT, json, limited, ipOf, body, cac
 /* ---- Foto-Check: Scrape + Foto-Analyse für die Seite ---- */
 const jobs = new Map(); // id -> { status, step, error, startedAt }
 const dayKey = () => new Date().toISOString().slice(0, 10);
-async function steps(id, url, j) {
+async function steps(id, url, j, lang) {
+    lang = lang === 'en' ? 'en' : 'de';
+    const loc = lang === 'en' ? 'en-GB' : 'de-DE', same = (c) => c.status === 200 && c.json && (c.json.locale || 'de-DE') === loc;   // Ausstattungsnamen, Betten und Kategorien kommen in der gewählten Sprache von Airbnb
     j.step = 'scrape';
     const have = await local(`/cached?id=${id}&slim=1`);
-    if (have.status !== 200) {
-      const s = await local(`/scrape?async=1&slim=1&url=${encodeURIComponent(url)}`);
-      if (s.status >= 400) throw new Error((s.json && s.json.error) || 'Scrape fehlgeschlagen');
+    if (!same(have)) {
+      const s = await local(`/scrape?async=1&slim=1&locale=${loc}${have.status === 200 ? '&refresh=1' : ''}&url=${encodeURIComponent(url)}`);
+      if (s.status >= 400 && have.status !== 200) throw new Error((s.json && s.json.error) || 'Scrape fehlgeschlagen');
       let ok = false;
-      for (let i = 0; i < 70 && !ok; i++) { await sleep(5000); const c = await local(`/cached?id=${id}&slim=1`); if (c.status === 200) ok = true; else if (c.status === 404 && c.json && c.json.lastError) throw new Error('Das Inserat konnte nicht gelesen werden'); }
-      if (!ok) throw new Error('Das Lesen des Inserats dauert zu lange');
+      for (let i = 0; i < 70 && !ok && !(s.status >= 400); i++) {
+        await sleep(5000); const c = await local(`/cached?id=${id}&slim=1`);
+        if (same(c)) ok = true;
+        else if (c.status === 200 && i >= 2 && c.json && c.json.cache && !c.json.cache.running) ok = true;   // Neu-Lesen in anderer Sprache gescheitert: mit den vorhandenen Daten weiterarbeiten
+        else if (c.status === 404 && c.json && c.json.lastError) throw new Error('Das Inserat konnte nicht gelesen werden');
+      }
+      if (!ok && have.status !== 200) throw new Error('Das Lesen des Inserats dauert zu lange');
     }
     j.step = 'photos';
     let done = false, refreshed = false;
     for (let i = 0; i < 90 && !done; i++) {
-      const r = await local(`/analyze-photos?id=${id}&async=1`);
-      if (r.status === 200) { if (getAnalysis(r.json)) done = true; else if (!refreshed) { refreshed = true; await local(`/analyze-photos?id=${id}&async=1&refresh=1`); await sleep(6000); } else throw new Error('Foto-Analyse fehlgeschlagen'); }
+      const r = await local(`/analyze-photos?id=${id}&async=1&lang=${lang}`);
+      if (r.status === 200) { if (getAnalysis(r.json)) done = true; else if (!refreshed) { refreshed = true; await local(`/analyze-photos?id=${id}&async=1&refresh=1&lang=${lang}`); await sleep(6000); } else throw new Error('Foto-Analyse fehlgeschlagen'); }
       else if (r.status >= 400) throw new Error((r.json && r.json.error) || 'Foto-Analyse fehlgeschlagen');
       else if (r.json && r.json.lastError) throw new Error('Foto-Analyse fehlgeschlagen');
       else await sleep(6000);
@@ -113,7 +120,7 @@ async function steps(id, url, j) {
 }
 async function pipeline(id, url) {
   const j = jobs.get(id);
-  try { await steps(id, url, j); j.status = 'done'; } catch (e) { j.status = 'error'; j.error = e.message; }
+  try { await steps(id, url, j, 'de'); j.status = 'done'; } catch (e) { j.status = 'error'; j.error = e.message; }
 }
 
 /* ---- Befund-Motor: kompletter Report für die Seite ---- */
@@ -126,9 +133,9 @@ function cachedReport(k) {
 }
 async function runReport(id, url, lang, j) {
   try {
-    if (j.step !== 'report') await steps(id, url, j);
+    await steps(id, url, j, lang);              // geht schnell, wenn Inserat und Foto-Analyse in dieser Sprache schon da sind
     j.step = 'report';
-    const [full, pc, mk] = await Promise.all([local(`/cached?id=${id}`), result(id), marketFor(id).catch((e) => { console.error('MARKT', id, e.message); return null; })]);
+    const [full, pc, mk] = await Promise.all([local(`/cached?id=${id}`), result(id, lang), marketFor(id).catch((e) => { console.error('MARKT', id, e.message); return null; })]);
     if (full.status !== 200) throw new Error('Das Inserat konnte nicht gelesen werden');
     if (full.json && full.json.ratings && typeof full.json.ratings.overall === 'object') full.json.ratings = { ...full.json.ratings, overall: avgOf(full.json) };   // Gesamtnote als Zahl
     const rep = await generateReportV2(full.json, pc ? { analysis: pc.analysis } : null, lang, process.env.ANTHROPIC_API_KEY || '');
@@ -138,38 +145,52 @@ async function runReport(id, url, lang, j) {
     j.status = 'done';
   } catch (e) { console.error('REPORT', id, e.message); j.status = 'error'; j.error = e.message; }
 }
+const ERR_EN = {
+  'Bitte einen Airbnb-Link im Format airbnb.de/rooms/… eingeben.': 'Please enter an Airbnb link in the format airbnb.de/rooms/…',
+  'Der Foto-Check für eigene Links ist in dieser Version noch geschlossen. Buche einen Demo-Call, dann prüfen wir dein Inserat.': 'The photo check for your own links is not open in this version yet. Book a demo call and we will check your listing.',
+  'Du hast diese Woche schon drei Analysen genutzt, oder heute sind alle vergeben. Buche einen Demo-Call, dann prüfen wir dein Inserat.': 'You have already used three analyses this week, or today’s are all taken. Book a demo call and we will check your listing.',
+  'Dienst nicht konfiguriert': 'Service not configured', 'Scrape fehlgeschlagen': 'Reading the listing failed', 'Das Inserat konnte nicht gelesen werden': 'The listing could not be read',
+  'Das Lesen des Inserats dauert zu lange': 'Reading the listing is taking too long', 'Foto-Analyse fehlgeschlagen': 'The photo analysis failed', 'Die Foto-Analyse dauert zu lange': 'The photo analysis is taking too long',
+  'Der Befund war unvollständig. Bitte später erneut versuchen.': 'The analysis was incomplete. Please try again later.', 'Der Maßnahmenplan war unvollständig. Bitte später erneut versuchen.': 'The action plan was incomplete. Please try again later.',
+  'Die KI hat keinen neuen Text geliefert': 'The AI did not return new text',
+};
+const E = (m, lang) => (lang === 'en' && ERR_EN[m]) || m;   // Meldungen in der gewählten Sprache
 async function handleReport(req, res, u) {
   if (!API_KEY) return json(res, 503, { ok: false, error: 'Dienst nicht konfiguriert' });
   const url = u.searchParams.get('url') || '', lang = u.searchParams.get('lang') === 'en' ? 'en' : 'de', m = url.match(/^https?:\/\/(?:www\.)?airbnb\.[a-z.]+\/rooms\/(\d{6,})/i);
-  if (!m) return json(res, 400, { ok: false, error: 'Bitte einen Airbnb-Link im Format airbnb.de/rooms/… eingeben.' });
+  if (!m) return json(res, 400, { ok: false, error: E('Bitte einen Airbnb-Link im Format airbnb.de/rooms/… eingeben.', lang) });
   const id = m[1], k = `${id}:${lang}`, ready = cachedReport(k);
-  if (ready) { const pc = await result(id); if (pc) return json(res, 200, { ok: true, status: 'done', id, report: ready, photoCheck: pc }); }
-  if (!(PUBLIC_ANALYZE || ALLOWED_IDS.has(id))) return json(res, 403, { ok: false, status: 'closed', error: 'Der Foto-Check für eigene Links ist in dieser Version noch geschlossen. Buche einen Demo-Call, dann prüfen wir dein Inserat.' });
+  if (ready) { const pc = await result(id, lang); if (pc) return json(res, 200, { ok: true, status: 'done', id, report: ready, photoCheck: pc }); }
+  if (!(PUBLIC_ANALYZE || ALLOWED_IDS.has(id))) return json(res, 403, { ok: false, status: 'closed', error: E('Der Foto-Check für eigene Links ist in dieser Version noch geschlossen. Buche einen Demo-Call, dann prüfen wir dein Inserat.', lang) });
   let j = jobs.get(`${k}`);
   if (j && j.status === 'error' && Date.now() - j.startedAt > 60e3) { jobs.delete(k); j = null; }
   if (!j) {
-    const known = !!(await result(id));          // Scrape und Foto-Analyse schon vorhanden: nur der Befund fehlt, zählt nicht gegen das Limit
-    if (!known && (limited('ip:' + ipOf(req), IP_LIMIT, IP_WINDOW) || limited('day:' + dayKey(), DAILY_LIMIT, 864e5))) return json(res, 429, { ok: false, status: 'limit', error: 'Du hast diese Woche schon drei Analysen genutzt, oder heute sind alle vergeben. Buche einen Demo-Call, dann prüfen wir dein Inserat.' });
-    j = { status: 'running', step: known ? 'report' : 'scrape', startedAt: Date.now() }; jobs.set(k, j); runReport(id, `https://www.airbnb.de/rooms/${id}`, lang, j);
+    const have = await result(id, lang), known = !!have || !!(await result(id, lang === 'en' ? 'de' : 'en'));   // schon analysiert (in irgendeiner Sprache): zählt nicht gegen das Limit
+    if (!known && (limited('ip:' + ipOf(req), IP_LIMIT, IP_WINDOW) || limited('day:' + dayKey(), DAILY_LIMIT, 864e5))) return json(res, 429, { ok: false, status: 'limit', error: E('Du hast diese Woche schon drei Analysen genutzt, oder heute sind alle vergeben. Buche einen Demo-Call, dann prüfen wir dein Inserat.', lang) });
+    j = { status: 'running', step: have ? 'report' : 'scrape', startedAt: Date.now() }; jobs.set(k, j); runReport(id, `https://www.airbnb.de/rooms/${id}`, lang, j);
   }
-  if (j.status === 'done') { const pc = await result(id), rp = cachedReport(k); if (pc && rp) return json(res, 200, { ok: true, status: 'done', id, report: rp, photoCheck: pc }); }
-  if (j.status === 'error') return json(res, 502, { ok: false, status: 'error', id, error: j.error });
-  return json(res, 202, { ok: true, status: 'running', step: j.step, id, preview: await preview(id) });
+  if (j.status === 'done') { const pc = await result(id, lang), rp = cachedReport(k); if (pc && rp) return json(res, 200, { ok: true, status: 'done', id, report: rp, photoCheck: pc }); }
+  if (j.status === 'error') return json(res, 502, { ok: false, status: 'error', id, error: E(j.error, lang) });
+  return json(res, 202, { ok: true, status: 'running', step: j.step, id, preview: await preview(id, lang) });
 }
 const avgOf = (x) => { const o = x && x.ratings && x.ratings.overall, v = o && typeof o === 'object' ? o.ratingAverage : (o ?? (x && x.rating && typeof x.rating === 'object' ? x.rating.ratingAverage : x && x.rating)); return v !== null && v !== undefined && Number.isFinite(Number(v)) ? Number(v) : null; };
-async function preview(id) {
+async function preview(id, lang) {
   try {
-    const [d, a] = await Promise.all([local(`/cached?id=${id}&slim=1`), local(`/analyze-photos?id=${id}`)]), p = {};
+    const [d, a] = await Promise.all([local(`/cached?id=${id}&slim=1`), local(`/analyze-photos?id=${id}&lang=${lang === 'en' ? 'en' : 'de'}&only=1`)]), p = {};
     if (d.status === 200 && d.json) { const x = d.json; p.title = x.title || null; p.rating = avgOf(x); p.reviews = x.reviewCount ?? (x.reviews || []).length; p.photos = (x.photos || []).length; p.amenities = (x.amenities || []).filter((z) => z.available).length; p.descChars = String(x.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().length; }
     const an = a.status === 200 ? getAnalysis(a.json) : null;
     if (an) { const ok = an.photos.filter((z) => [z.brightness, z.sharpness, z.composition, z.tidiness].every(Number.isFinite)); if (ok.length) p.photoScore = Math.round(ok.reduce((t, z) => t + q4(z), 0) / ok.length * 20); p.weakPhotos = an.photos.filter((z) => z.keep === false).length; }
     return p;
   } catch { return {}; }
 }
-async function result(id) {
-  const [d, a] = await Promise.all([local(`/cached?id=${id}&slim=1`), local(`/analyze-photos?id=${id}`)]);
+const ROOM_EN = { 'Küche': 'Kitchen', 'Wohnzimmer': 'Living room', 'Esszimmer': 'Dining room', 'Schlafzimmer': 'Bedroom', 'Bad': 'Bathroom', 'Balkon/Terrasse': 'Balcony/Terrace', 'Eingang/Flur': 'Entrance/Hallway', 'Treppenhaus/Lift': 'Stairwell/Lift', 'Aussen/Fassade': 'Exterior/Facade', 'Detail': 'Detail', 'Sonstiges': 'Other' };
+const roomEn = (r) => (r && ROOM_EN[r]) || r;   // Raumnamen sind im Datensatz feste deutsche Schlüssel, die Seite übersetzt Urteile selbst; im PDF und im Befund erscheinen sie roh
+async function result(id, lang) {
+  lang = lang === 'en' ? 'en' : 'de';
+  const [d, a] = await Promise.all([local(`/cached?id=${id}&slim=1`), local(`/analyze-photos?id=${id}&lang=${lang}&only=1`)]);
   const analysis = a.status === 200 ? getAnalysis(a.json) : null;
   if (d.status !== 200 || !analysis) return null;
+  if (lang === 'en') { (analysis.photos || []).forEach((p) => { p.room = roomEn(p.room); }); (analysis.roomCoverage || []).forEach((r) => { r.room = roomEn(r.room); }); }
   const photos = (d.json.photos || []).map((p) => ({ position: p.position, caption: p.caption || null, thumb: `${strip(p.url)}?im_w=480`, full: `${strip(p.url)}?im_w=1200` }));
   return { title: d.json.title || null, rating: d.json.rating ?? null, reviewCount: d.json.reviewCount ?? null, photoCount: photos.length, photos, analyzedAt: a.json.analyzedAt, coverUrl: a.json.coverUrl || null, analysis };
 }
