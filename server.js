@@ -8,10 +8,14 @@ const PORT = Number(process.env.PORT || 3000);
 const API_KEY = process.env.API_KEY || '';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const PHOTO_MODEL = process.env.PHOTO_MODEL || 'claude-sonnet-5-5';
-const PHOTO_MAX = Number(process.env.PHOTO_MAX || 30);
+const PHOTO_MAX = Number(process.env.PHOTO_MAX || 0);              // 0 = alle Fotos des Inserats analysieren
+const PHOTO_SINGLE = Number(process.env.PHOTO_SINGLE || 30);       // bis zu dieser Zahl ein einzelner Aufruf, darueber in Gruppen
+const PHOTO_CHUNK = Number(process.env.PHOTO_CHUNK || 20);         // Fotos pro Gruppe
+const PHOTO_PAR = Number(process.env.PHOTO_PAR || 2);              // Gruppen gleichzeitig
+const ANTHROPIC_BASE = process.env.ANTHROPIC_BASE || 'https://api.anthropic.com';
 const NAV_TIMEOUT = 45000;
 const TOTAL_TIMEOUT = 150000;
-const PHOTO_TIMEOUT = 240000;
+const PHOTO_TIMEOUT = 540000;
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MIN || 360) * 60000; // Standard: 6 Stunden
 const DATA_DIR = process.env.DATA_DIR || '/tmp/listing-audit-cache'; // mit Railway-Volume dauerhaft
 const UA =
@@ -475,7 +479,7 @@ async function fetchImageB64(url) {
   return { type, data: buf.toString('base64'), bytes: buf.length };
 }
 
-const photoSig = (d) => crypto.createHash('sha1').update((d.photos || []).map((p) => p.url).join('|')).digest('hex');
+const photoSig = (d) => crypto.createHash('sha1').update('v2|' + (d.photos || []).map((p) => p.url).join('|')).digest('hex');   // v2: aeltere Analysen (nur die ersten 30 Fotos) werden neu erzeugt
 
 const PHOTO_INSTRUCTIONS = `Bewerte die Fotos dieses Airbnb-Listings für einen Listing-Audit. Beurteile NUR, was du auf den Bildern wirklich siehst; bei Unsicherheit schreibe "unklar". Sei konkret und knapp.
 
@@ -498,41 +502,167 @@ Antworte AUSSCHLIESSLICH mit gültigem JSON (kein Text davor oder danach, keine 
 }
 Skala 1 = schlecht, 5 = sehr gut. "amenityCoverage": nur Ausstattung, die man fotografieren kann (z. B. Küche, Backofen, Geschirrspüler, Waschmaschine, Trockner, Fernseher, Arbeitsplatz, Esstisch, Babybett, Balkon, Lift, Kaffeemaschine, Brettspiele, Eingang). Keine Dinge wie WLAN oder Check-in.`;
 
+const textOf = (j) => (j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
+function parseJson(text) {
+  let a = null;
+  try { a = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, '').trim()); } catch {
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) { try { a = JSON.parse(m[0]); } catch {} }
+  }
+  return a;
+}
+async function claude(content, maxTokens) {   // mit Wiederholung bei Ueberlastung oder Ratenlimit
+  let last;
+  for (let i = 0; i < 4; i++) {
+    const r = await fetch(`${ANTHROPIC_BASE}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: PHOTO_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content }] }),
+      signal: AbortSignal.timeout(240000),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) return j;
+    last = httpError(502, `Anthropic ${r.status}: ${j?.error?.message || 'Fehler'}`);
+    if (![429, 500, 502, 503, 529].includes(r.status)) throw last;
+    const wait = Math.min(30, Number(r.headers.get('retry-after')) || 5 * (i + 1));
+    await new Promise((res) => setTimeout(res, wait * 1000));
+  }
+  throw last;
+}
+
+const CHUNK_INSTRUCTIONS = `Bewerte die Fotos dieser Gruppe für einen Listing-Audit. Beurteile NUR, was du auf den Bildern wirklich siehst; bei Unsicherheit schreibe "unklar". Sei konkret und knapp. Verwende die Foto-Nummern aus den Beschriftungen.
+
+Antworte AUSSCHLIESSLICH mit gültigem JSON (kein Text davor oder danach, keine Markdown-Zäune) in genau dieser Form:
+{
+  "photos": [
+    {"position": <Foto-Nr.>, "room": "Küche|Wohnzimmer|Esszimmer|Schlafzimmer|Bad|Balkon/Terrasse|Eingang/Flur|Treppenhaus/Lift|Aussen/Fassade|Detail|Sonstiges",
+     "shows": "ein kurzer Satz, was zu sehen ist",
+     "brightness": 1-5, "sharpness": 1-5, "composition": 1-5, "tidiness": 1-5,
+     "issues": ["z. B. zu dunkel, schiefer Winkel, Unordnung, Gegenlicht, Personen/Auto sichtbar"],
+     "keep": true|false,
+     "tip": "eine konkrete Verbesserung oder leer"}
+  ],
+  "amenityCoverage": [{"amenity": "<Name aus der Liste>", "photographed": true|false|"unklar", "positions": [<Nr.>]}]
+}
+Skala 1 = schlecht, 5 = sehr gut. "amenityCoverage": nur Ausstattung, die man fotografieren kann (z. B. Küche, Backofen, Geschirrspüler, Waschmaschine, Trockner, Fernseher, Arbeitsplatz, Esstisch, Babybett, Balkon, Lift, Kaffeemaschine, Brettspiele, Eingang). Keine Dinge wie WLAN oder Check-in. "photographed" gilt nur für die Fotos DIESER Gruppe: true, wenn der Punkt auf mindestens einem dieser Fotos klar zu sehen ist, sonst false.`;
+
+const SYNTH_INSTRUCTIONS = `Du bekommst die Einzelbewertungen aller Fotos eines Airbnb-Listings (jedes Foto wurde schon einzeln angesehen). Erstelle daraus die Gesamtbewertung für einen Listing-Audit. Stütze dich nur auf diese Angaben, erfinde nichts.
+
+Antworte AUSSCHLIESSLICH mit gültigem JSON (kein Text davor oder danach, keine Markdown-Zäune) in genau dieser Form:
+{
+  "cover": {"verdict": "gut|mittel|schwach", "reason": "ein Satz", "betterPosition": <Nr. oder null>},
+  "recommendedOrder": [<Positionen in empfohlener Reihenfolge, die ersten 5 zählen am meisten>],
+  "roomCoverage": [{"room": "Küche", "verdict": "ausreichend|zu wenig|fehlt"}],
+  "missingMotifs": ["Motive, die ein Gast erwartet und die fehlen"],
+  "overall": {"score": 0-100, "grade": "A|B|C|D|F", "summary": "2-3 Sätze", "topFixes": ["max. 5, nach Wirkung sortiert"]}
+}
+"roomCoverage": jeder Raum aus der Zählung plus Räume, die laut Schlafarrangements oder Ausstattung vorhanden sein müssten, aber auf keinem Foto vorkommen (verdict "fehlt"). "recommendedOrder": nenne möglichst alle Fotos, schwache (keep=false) ans Ende.`;
+
+// Viele Fotos: in Gruppen ansehen, dann in einem reinen Textaufruf zur Gesamtbewertung zusammenfassen
+async function analyzeChunked(d, photos, cover, amen, sleeping) {
+  const groups = [];
+  for (let i = 0; i < photos.length; i += PHOTO_CHUNK) groups.push(photos.slice(i, i + PHOTO_CHUNK));
+  const usage = { input_tokens: 0, output_tokens: 0 }, skipped = [];
+  const addUsage = (j) => { const u = j.usage || {}; usage.input_tokens += u.input_tokens || 0; usage.output_tokens += u.output_tokens || 0; };
+  const parts = await mapLimit(groups, PHOTO_PAR, async (g, gi) => {
+    const imgs = await mapLimit(g, 5, (p) => fetchImageB64(p.url));
+    const content = [{ type: 'text', text: `Listing: "${d.title}". Schlafarrangements: ${sleeping || 'unbekannt'}.\nAmenities laut Airbnb: ${amen}.\nDas Listing hat insgesamt ${photos.length} Fotos. Du siehst Gruppe ${gi + 1} von ${groups.length}: Fotos ${g[0].position} bis ${g[g.length - 1].position} in Airbnb-Reihenfolge, jeweils mit Nummer und Beschriftung.` }];
+    let n = 0;
+    g.forEach((p, i) => {
+      const img = imgs[i];
+      if (!img || img.error || !img.data) { skipped.push({ position: p.position, error: img?.error || 'unbekannt' }); return; }
+      content.push({ type: 'text', text: `Foto ${p.position} · Beschriftung: ${p.caption ?? '–'}${cover && p.url === cover ? ' · ist das aktuelle TITELBILD' : ''}` });
+      content.push({ type: 'image', source: { type: 'base64', media_type: img.type, data: img.data } });
+      n++;
+    });
+    if (!n) throw new Error('Keine Bilder ladbar');
+    content.push({ type: 'text', text: CHUNK_INSTRUCTIONS });
+    for (let t = 0; t < 2; t++) {
+      const j = await claude(content, 8000); addUsage(j);
+      const a = parseJson(textOf(j));
+      if (a && Array.isArray(a.photos) && a.photos.length) return a;
+    }
+    throw new Error('Antwort nicht lesbar');
+  });
+
+  const byPos = new Map(), am = new Map();
+  parts.forEach((a, gi) => {
+    const valid = new Set(groups[gi].map((p) => p.position));
+    if (!a || a.error) { groups[gi].forEach((p) => { if (!skipped.some((x) => x.position === p.position)) skipped.push({ position: p.position, error: a?.error || 'unbekannt' }); }); return; }
+    (a.photos || []).forEach((p) => { const k = Number(p && p.position); if (valid.has(k) && !byPos.has(k)) byPos.set(k, { ...p, position: k }); });
+    groups[gi].forEach((p) => { if (!byPos.has(p.position) && !skipped.some((x) => x.position === p.position)) skipped.push({ position: p.position, error: 'nicht bewertet' }); });
+    (a.amenityCoverage || []).forEach((x) => {
+      const name = String((x && x.amenity) || '').trim(); if (!name) return;
+      const k = name.toLowerCase(), cur = am.get(k) || { amenity: name, photographed: false, positions: [] };
+      if (x.photographed === true) cur.photographed = true; else if (x.photographed === 'unklar' && cur.photographed !== true) cur.photographed = 'unklar';
+      (Array.isArray(x.positions) ? x.positions : []).forEach((n) => { const v = Number(n); if (Number.isFinite(v) && !cur.positions.includes(v)) cur.positions.push(v); });
+      am.set(k, cur);
+    });
+  });
+  const list = [...byPos.values()].sort((a, b) => a.position - b.position);
+  if (!list.length) throw httpError(502, 'Die Fotos konnten nicht bewertet werden');
+
+  const counts = {}; list.forEach((p) => { const r = p.room || 'Sonstiges'; counts[r] = (counts[r] || 0) + 1; });
+  const coverPos = cover ? (photos.find((p) => p.url === cover) || {}).position ?? null : null;
+  const lines = list.map((p) => `${p.position} | ${p.room} | ${p.shows} | H${p.brightness} S${p.sharpness} K${p.composition} O${p.tidiness} | ${(p.issues || []).join('; ') || '-'} | ${p.keep === false ? 'streichen' : 'behalten'}${p.tip ? ' | Tipp: ' + p.tip : ''}`);
+  const synthText = `Listing: "${d.title}". Schlafarrangements: ${sleeping || 'unbekannt'}.\nAmenities laut Airbnb: ${amen}.\nAktuelles Titelbild: ${coverPos ? 'Foto ' + coverPos : 'unbekannt'}. Fotos insgesamt: ${photos.length}, bewertet: ${list.length}.\nZählung pro Raum: ${Object.entries(counts).map(([r, n]) => `${r} ${n}`).join(', ')}.\n\nFoto | Raum | Zeigt | Noten (Helligkeit, Schärfe, Komposition, Ordnung) | Probleme | Empfehlung\n${lines.join('\n')}\n\n${SYNTH_INSTRUCTIONS}`;
+  let s = null;
+  for (let t = 0; t < 2 && !(s && s.overall && Array.isArray(s.recommendedOrder)); t++) {
+    const j = await claude([{ type: 'text', text: synthText }], 4000); addUsage(j);
+    s = parseJson(textOf(j));
+  }
+  if (!(s && s.overall && Array.isArray(s.recommendedOrder))) throw httpError(502, 'Die Gesamtbewertung der Fotos war nicht lesbar');
+
+  const valid = new Set(list.map((p) => p.position)), seen = new Set(), order = [];
+  s.recommendedOrder.forEach((n) => { const k = Number(n); if (valid.has(k) && !seen.has(k)) { seen.add(k); order.push(k); } });
+  list.forEach((p) => { if (!seen.has(p.position)) order.push(p.position); });
+  const verdicts = ['ausreichend', 'zu wenig', 'fehlt'];
+  const rc = (s.roomCoverage || []).filter((r) => r && r.room).map((r) => {
+    const c = counts[r.room] || 0; let v = verdicts.includes(r.verdict) ? r.verdict : (c >= 2 ? 'ausreichend' : c === 1 ? 'zu wenig' : 'fehlt');
+    if (c > 0 && v === 'fehlt') v = 'zu wenig';
+    return { room: String(r.room), photos: c, verdict: v };
+  });
+  Object.keys(counts).forEach((room) => { if (!rc.some((r) => r.room === room)) rc.push({ room, photos: counts[room], verdict: counts[room] >= 2 ? 'ausreichend' : 'zu wenig' }); });
+  const better = Number(s.cover && s.cover.betterPosition);
+  return {
+    usage, skipped, chunks: groups.length, analysis: {
+      photos: list,
+      cover: { position: coverPos, verdict: (s.cover && s.cover.verdict) || null, reason: (s.cover && s.cover.reason) || '', betterPosition: valid.has(better) ? better : null },
+      recommendedOrder: order, roomCoverage: rc, amenityCoverage: [...am.values()].map((x) => ({ ...x, positions: x.positions.sort((a, b) => a - b) })),
+      missingMotifs: Array.isArray(s.missingMotifs) ? s.missingMotifs.map(String).filter(Boolean) : [], overall: s.overall,
+    },
+  };
+}
+
 async function analyzePhotos(d) {
   if (!ANTHROPIC_API_KEY) throw httpError(503, 'ANTHROPIC_API_KEY ist in den Railway-Variablen nicht gesetzt');
-  const photos = (d.photos || []).slice(0, PHOTO_MAX);
+  const all = d.photos || [], photos = PHOTO_MAX > 0 ? all.slice(0, PHOTO_MAX) : all;
   if (!photos.length) throw httpError(422, 'Keine Fotos im Scrape-Ergebnis');
 
-  const imgs = await mapLimit(photos, 5, (p) => fetchImageB64(p.url));
   const cover = d.coverUrl ? stripQuery(d.coverUrl) : null;
   const amen = (d.amenities || []).filter((a) => a.available).map((a) => a.name).join(', ');
   const sleeping = (d.sleeping || []).map((s) => `${s.room}: ${s.beds}`).join('; ');
 
-  const content = [{
-    type: 'text',
-    text: `Listing: "${d.title}". Schlafarrangements: ${sleeping || 'unbekannt'}.\nAmenities laut Airbnb: ${amen}.\nIm Folgenden ${photos.length} Fotos in Airbnb-Reihenfolge, jeweils mit Nummer und Beschriftung.`,
-  }];
-  const skipped = [];
-  photos.forEach((p, i) => {
-    const img = imgs[i];
-    if (!img || img.error || !img.data) { skipped.push({ position: p.position, error: img?.error || 'unbekannt' }); return; }
-    content.push({ type: 'text', text: `Foto ${p.position} · Beschriftung: ${p.caption ?? '–'}${cover && p.url === cover ? ' · ist das aktuelle TITELBILD' : ''}` });
-    content.push({ type: 'image', source: { type: 'base64', media_type: img.type, data: img.data } });
-  });
-  content.push({ type: 'text', text: PHOTO_INSTRUCTIONS });
-
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: PHOTO_MODEL, max_tokens: 8000, messages: [{ role: 'user', content }] }),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw httpError(502, `Anthropic ${r.status}: ${j?.error?.message || 'Fehler'}`);
-  const text = (j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
-  let analysis = null;
-  try { analysis = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, '').trim()); } catch {
-    const m = text.match(/\{[\s\S]*\}/);
-    if (m) { try { analysis = JSON.parse(m[0]); } catch {} }
+  let analysis = null, skipped = [], usage = null, raw = null, chunks = 1;
+  if (photos.length > PHOTO_SINGLE) {
+    const r = await analyzeChunked(d, photos, cover, amen, sleeping);
+    ({ analysis, skipped, usage, chunks } = r);
+  } else {
+    const imgs = await mapLimit(photos, 5, (p) => fetchImageB64(p.url));
+    const content = [{
+      type: 'text',
+      text: `Listing: "${d.title}". Schlafarrangements: ${sleeping || 'unbekannt'}.\nAmenities laut Airbnb: ${amen}.\nIm Folgenden ${photos.length} Fotos in Airbnb-Reihenfolge, jeweils mit Nummer und Beschriftung.`,
+    }];
+    photos.forEach((p, i) => {
+      const img = imgs[i];
+      if (!img || img.error || !img.data) { skipped.push({ position: p.position, error: img?.error || 'unbekannt' }); return; }
+      content.push({ type: 'text', text: `Foto ${p.position} · Beschriftung: ${p.caption ?? '–'}${cover && p.url === cover ? ' · ist das aktuelle TITELBILD' : ''}` });
+      content.push({ type: 'image', source: { type: 'base64', media_type: img.type, data: img.data } });
+    });
+    content.push({ type: 'text', text: PHOTO_INSTRUCTIONS });
+    const j = await claude(content, 8000);
+    const text = textOf(j);
+    analysis = parseJson(text); usage = j.usage ?? null; if (!analysis) raw = text;
   }
   return {
     ok: true,
@@ -541,11 +671,13 @@ async function analyzePhotos(d) {
     sig: photoSig(d),
     model: PHOTO_MODEL,
     photosAnalyzed: photos.length - skipped.length,
+    photosTotal: all.length,
+    chunks,
     skipped,
     coverUrl: cover,
-    usage: j.usage ?? null,
+    usage,
     analysis,
-    ...(analysis ? {} : { raw: text }),
+    ...(analysis ? {} : { raw }),
   };
 }
 
