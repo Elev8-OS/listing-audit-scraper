@@ -4,7 +4,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { salvageJson } from './report.js';
-import { generateReportV2, PROMPT_VERSION } from './engine.js';
+import { generateReportV2, PROMPT_VERSION, tagPhotoRefs } from './engine.js';
 import { marketFor } from './market.js';
 import { createLeads } from './leads.js';
 import { patchPage, patchScript } from './patch.js';
@@ -185,12 +185,21 @@ async function preview(id, lang) {
 }
 const ROOM_EN = { 'Küche': 'Kitchen', 'Wohnzimmer': 'Living room', 'Esszimmer': 'Dining room', 'Schlafzimmer': 'Bedroom', 'Bad': 'Bathroom', 'Balkon/Terrasse': 'Balcony/Terrace', 'Eingang/Flur': 'Entrance/Hallway', 'Treppenhaus/Lift': 'Stairwell/Lift', 'Aussen/Fassade': 'Exterior/Facade', 'Detail': 'Detail', 'Sonstiges': 'Other' };
 const roomEn = (r) => (r && ROOM_EN[r]) || r;   // Raumnamen sind im Datensatz feste deutsche Schlüssel, die Seite übersetzt Urteile selbst; im PDF und im Befund erscheinen sie roh
+// Foto-Nummern in den Texten der Analyse sind Airbnb-Nummern: "Foto 4" wird zu "Airbnb-Foto 4" (wirkt auch bei bereits gespeicherten Analysen)
+function tagAnalysisRefs(a) {
+  const t = (o, ks) => ks.forEach((k) => { if (o && typeof o[k] === 'string') o[k] = tagPhotoRefs(o[k]); });
+  (a.photos || []).forEach((p) => { t(p, ['shows', 'tip']); if (Array.isArray(p.issues)) p.issues = p.issues.map(tagPhotoRefs); });
+  if (a.cover) t(a.cover, ['reason']);
+  if (a.overall) { t(a.overall, ['summary']); if (Array.isArray(a.overall.topFixes)) a.overall.topFixes = a.overall.topFixes.map(tagPhotoRefs); }
+  if (Array.isArray(a.missingMotifs)) a.missingMotifs = a.missingMotifs.map(tagPhotoRefs);
+}
 async function result(id, lang) {
   lang = lang === 'en' ? 'en' : 'de';
   const [d, a] = await Promise.all([local(`/cached?id=${id}&slim=1`), local(`/analyze-photos?id=${id}&lang=${lang}&only=1`)]);
   const analysis = a.status === 200 ? getAnalysis(a.json) : null;
   if (d.status !== 200 || !analysis) return null;
   if (lang === 'en') { (analysis.photos || []).forEach((p) => { p.room = roomEn(p.room); }); (analysis.roomCoverage || []).forEach((r) => { r.room = roomEn(r.room); }); }
+  tagAnalysisRefs(analysis);
   const photos = (d.json.photos || []).map((p) => ({ position: p.position, caption: p.caption || null, thumb: `${strip(p.url)}?im_w=480`, full: `${strip(p.url)}?im_w=1200` }));
   return { title: d.json.title || null, rating: d.json.rating ?? null, reviewCount: d.json.reviewCount ?? null, photoCount: photos.length, photos, analyzedAt: a.json.analyzedAt, coverUrl: a.json.coverUrl || null, analysis };
 }
