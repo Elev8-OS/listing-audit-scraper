@@ -1,13 +1,13 @@
 // Befund-Motor v2: zwei kleinere KI-Aufrufe (Analyse, Texte), geprüft, mit festen Sichtbarkeits-Signalen und Ausstattungs-Abgleich.
 import { prepare, normalize, salvageJson } from './report.js';
-export const PROMPT_VERSION = 'v8';   // bei jeder Aenderung der Prompts hochzaehlen: gespeicherte Reports werden dann neu erzeugt
+export const PROMPT_VERSION = 'v9';   // bei jeder Aenderung der Prompts hochzaehlen: gespeicherte Reports werden dann neu erzeugt
 const MODEL = process.env.REPORT_MODEL || process.env.PHOTO_MODEL || 'claude-sonnet-5-5';
 const BASE = process.env.ANTHROPIC_BASE || 'https://api.anthropic.com';
 const len = (s) => [...String(s || '')].length;
 const RULES = (L) => `REGELN
 - Nutze NUR Fakten aus den DATEN. Erfinde nichts: keine Umsätze, keine Marktdaten, keine Konkurrenz, keine Zahlen, die nicht in den Daten stehen.
 - Bewirb oder behaupte nichts, was die Foto-Analyse oder die Bewertungen nicht bestätigen (zum Beispiel kein „Balkon“, wenn die Fotos nur einen Innenhof zeigen).
-- Sprache: Schreibe ALLE Texte deiner Antwort auf ${L === 'en' ? 'Englisch' : 'Deutsch (Schweizer Schreibweise, ss statt ß)'}, auch wenn Inserat, Bewertungen oder DATEN in einer anderen Sprache sind. Das gilt auch für Titel und Beschreibung. Fakten übersetzt du sinngemäss, Eigennamen und Ortsnamen bleiben. Ton: direkt, konkret, ohne Floskeln.`;
+- Sprache: Schreibe ALLE Texte deiner Antwort auf ${L === 'en' ? 'Englisch' : 'Deutsch (Schweizer Schreibweise, ss statt ß)'}, auch wenn Inserat, Bewertungen oder DATEN in einer anderen Sprache sind. Das gilt auch für Titel und Beschreibung. Fakten übersetzt du sinngemäss, Eigennamen und Ortsnamen bleiben. Foto-Nummern (n in photoShows) sind die Nummern auf Airbnb: Wenn du ein Foto nennst, schreibst du ${L === 'en' ? '„Airbnb photo N“' : '„Airbnb-Foto N“'}. Ton: direkt, konkret, ohne Floskeln.`;
 const LAST = (L) => `\n\nERINNERUNG: Alle Texte in deiner Antwort sind auf ${L === 'en' ? 'Englisch' : 'Deutsch'} geschrieben. Nur das JSON ausgeben.`;
 const SA1 = `{
  "listing": {"city": "Ort oder null", "rating": 0-5 oder null, "daysSinceReview": Zahl oder null},
@@ -136,6 +136,18 @@ function addBedrooms(rep, bc, d, L) {
   rep.descAfter = fixBedroomClaims(rep.descAfter, bc);
 }
 
+/* ---- Foto-Nummern in Texten sind immer die Airbnb-Nummern: das sagen wir ausdruecklich ---- */
+const PH_DE = /(?<![\w-])(?<!Airbnb )(Fotos?)(\s+\d+(?:\s*(?:,|und|bis|\u2013|-|\/)\s*\d+)*)/g;
+const PH_EN = /(?<![\w-])(?<!Airbnb )([Pp]hotos?)(\s+\d+(?:\s*(?:,|and|to|\u2013|-|\/)\s*\d+)*)/g;
+export const tagPhotoRefs = (s) => (typeof s === 'string' ? s.replace(PH_DE, (m, w, nums) => `Airbnb-${w}${nums}`).replace(PH_EN, (m, w, nums) => `Airbnb ${w.toLowerCase()}${nums}`) : s);
+function tagReport(rep) {   // nur Befund-Texte, nie die Vorschlaege fuer das Inserat (Titel, Beschreibung, copy)
+  const t = (o, ks) => ks.forEach((k) => { if (o && typeof o[k] === 'string') o[k] = tagPhotoRefs(o[k]); });
+  (rep.cats || []).forEach((c) => { t(c, ['finding', 'why', 'affects']); if (Array.isArray(c.evidence)) c.evidence = c.evidence.map(tagPhotoRefs); });
+  (rep.gaps || []).forEach((g) => t(g, ['says', 'real', 'fix']));
+  (rep.actions || []).forEach((a) => t(a, ['t', 'why', 'how']));
+  return rep;
+}
+
 export async function generateReportV2(d, photoRes, lang, key) {
   if (!key) throw Object.assign(new Error('ANTHROPIC_API_KEY fehlt'), { status: 503 });
   const ps = photoScore(photoRes);
@@ -159,5 +171,5 @@ export async function generateReportV2(d, photoRes, lang, key) {
   if (rep.actions[1] && !rep.actions[1].copy) rep.actions[1].copy = rep.descAfter;
   addAmenity(rep, chk, A.amenityNotes, d, photoRes, L);
   rep.cats.forEach((c) => { if (c.base == null) return; const as = rep.actions.filter((a) => a.cat === c.id), sum = as.reduce((t, a) => t + a.gain, 0), room = Math.max(0, 98 - c.base); if (sum > room && sum > 0) as.forEach((a) => { a.gain = Math.max(a.gain > 0 ? 1 : 0, Math.floor(a.gain * room / sum)); }); });
-  return rep;
+  return tagReport(rep);
 }
