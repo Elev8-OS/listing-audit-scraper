@@ -30,13 +30,14 @@ const lastError = new Map();
 const photoErr = new Map();
 const inflight = new Map();
 const photoJobs = new Map();
+const pkey = (id, lang) => (lang === 'en' ? `${id}~en` : String(id));   // Foto-Analyse pro Sprache: Deutsch unter der Listing-ID, Englisch mit ~en
 try {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   for (const f of fs.readdirSync(DATA_DIR)) {
     if (!f.endsWith('.json')) continue;
     try {
       const j = JSON.parse(fs.readFileSync(path.join(DATA_DIR, f), 'utf8'));
-      if (f.startsWith('photos-')) { if (j.listingId) photoCache.set(j.listingId, j); }
+      if (f.startsWith('photos-')) { if (j.listingId) photoCache.set(pkey(j.listingId, j.lang), j); }
       else if (j.listingId) cache.set(j.listingId, j);
     } catch {}
   }
@@ -46,8 +47,9 @@ function cacheSet(data) {
   fs.writeFile(path.join(DATA_DIR, `${data.listingId}.json`), JSON.stringify(data), () => {});
 }
 function photoCacheSet(data) {
-  photoCache.set(data.listingId, data);
-  fs.writeFile(path.join(DATA_DIR, `photos-${data.listingId}.json`), JSON.stringify(data), () => {});
+  const k = pkey(data.listingId, data.lang);
+  photoCache.set(k, data);
+  fs.writeFile(path.join(DATA_DIR, `photos-${k}.json`), JSON.stringify(data), () => {});
 }
 const ageSec = (d) => Math.round((Date.now() - Date.parse(d.fetchedAt)) / 1000);
 const isFresh = (d) => Boolean(d) && Date.now() - Date.parse(d.fetchedAt) < CACHE_TTL_MS;
@@ -436,6 +438,7 @@ async function scrape(target, opts) {
       fetchedAt: new Date().toISOString(),
       listingId: target.id,
       url: target.url,
+      locale: opts.locale,
       reviewsIncluded: opts.reviews,
       pageTitle,
       coverUrl: coverUrl ? stripQuery(coverUrl) : null,
@@ -502,6 +505,7 @@ Antworte AUSSCHLIESSLICH mit gültigem JSON (kein Text davor oder danach, keine 
 }
 Skala 1 = schlecht, 5 = sehr gut. "amenityCoverage": nur Ausstattung, die man fotografieren kann (z. B. Küche, Backofen, Geschirrspüler, Waschmaschine, Trockner, Fernseher, Arbeitsplatz, Esstisch, Babybett, Balkon, Lift, Kaffeemaschine, Brettspiele, Eingang). Keine Dinge wie WLAN oder Check-in.`;
 
+const langNote = (lang) => (lang === 'en' ? '\n\nSPRACHE: Schreibe alle Freitexte (shows, issues, tip, reason, summary, topFixes, missingMotifs) auf Englisch. Die Werte von "room" und "verdict" bleiben exakt so, wie sie im Schema stehen (deutsche Schlüsselwörter). Alles andere ist Englisch.' : '');
 const textOf = (j) => (j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
 function parseJson(text) {
   let a = null;
@@ -559,7 +563,7 @@ Antworte AUSSCHLIESSLICH mit gültigem JSON (kein Text davor oder danach, keine 
 "roomCoverage": jeder Raum aus der Zählung plus Räume, die laut Schlafarrangements oder Ausstattung vorhanden sein müssten, aber auf keinem Foto vorkommen (verdict "fehlt"). "recommendedOrder": nenne möglichst alle Fotos, schwache (keep=false) ans Ende.`;
 
 // Viele Fotos: in Gruppen ansehen, dann in einem reinen Textaufruf zur Gesamtbewertung zusammenfassen
-async function analyzeChunked(d, photos, cover, amen, sleeping) {
+async function analyzeChunked(d, photos, cover, amen, sleeping, note) {
   const groups = [];
   for (let i = 0; i < photos.length; i += PHOTO_CHUNK) groups.push(photos.slice(i, i + PHOTO_CHUNK));
   const usage = { input_tokens: 0, output_tokens: 0 }, skipped = [];
@@ -576,7 +580,7 @@ async function analyzeChunked(d, photos, cover, amen, sleeping) {
       n++;
     });
     if (!n) throw new Error('Keine Bilder ladbar');
-    content.push({ type: 'text', text: CHUNK_INSTRUCTIONS });
+    content.push({ type: 'text', text: CHUNK_INSTRUCTIONS + note });
     for (let t = 0; t < 2; t++) {
       const j = await claude(content, 8000); addUsage(j);
       const a = parseJson(textOf(j));
@@ -605,7 +609,7 @@ async function analyzeChunked(d, photos, cover, amen, sleeping) {
   const counts = {}; list.forEach((p) => { const r = p.room || 'Sonstiges'; counts[r] = (counts[r] || 0) + 1; });
   const coverPos = cover ? (photos.find((p) => p.url === cover) || {}).position ?? null : null;
   const lines = list.map((p) => `${p.position} | ${p.room} | ${p.shows} | H${p.brightness} S${p.sharpness} K${p.composition} O${p.tidiness} | ${(p.issues || []).join('; ') || '-'} | ${p.keep === false ? 'streichen' : 'behalten'}${p.tip ? ' | Tipp: ' + p.tip : ''}`);
-  const synthText = `Listing: "${d.title}". Schlafarrangements: ${sleeping || 'unbekannt'}.\nAmenities laut Airbnb: ${amen}.\nAktuelles Titelbild: ${coverPos ? 'Foto ' + coverPos : 'unbekannt'}. Fotos insgesamt: ${photos.length}, bewertet: ${list.length}.\nZählung pro Raum: ${Object.entries(counts).map(([r, n]) => `${r} ${n}`).join(', ')}.\n\nFoto | Raum | Zeigt | Noten (Helligkeit, Schärfe, Komposition, Ordnung) | Probleme | Empfehlung\n${lines.join('\n')}\n\n${SYNTH_INSTRUCTIONS}`;
+  const synthText = `Listing: "${d.title}". Schlafarrangements: ${sleeping || 'unbekannt'}.\nAmenities laut Airbnb: ${amen}.\nAktuelles Titelbild: ${coverPos ? 'Foto ' + coverPos : 'unbekannt'}. Fotos insgesamt: ${photos.length}, bewertet: ${list.length}.\nZählung pro Raum: ${Object.entries(counts).map(([r, n]) => `${r} ${n}`).join(', ')}.\n\nFoto | Raum | Zeigt | Noten (Helligkeit, Schärfe, Komposition, Ordnung) | Probleme | Empfehlung\n${lines.join('\n')}\n\n${SYNTH_INSTRUCTIONS}${note}`;
   let s = null;
   for (let t = 0; t < 2 && !(s && s.overall && Array.isArray(s.recommendedOrder)); t++) {
     const j = await claude([{ type: 'text', text: synthText }], 4000); addUsage(j);
@@ -634,18 +638,18 @@ async function analyzeChunked(d, photos, cover, amen, sleeping) {
   };
 }
 
-async function analyzePhotos(d) {
+async function analyzePhotos(d, lang) {
   if (!ANTHROPIC_API_KEY) throw httpError(503, 'ANTHROPIC_API_KEY ist in den Railway-Variablen nicht gesetzt');
   const all = d.photos || [], photos = PHOTO_MAX > 0 ? all.slice(0, PHOTO_MAX) : all;
   if (!photos.length) throw httpError(422, 'Keine Fotos im Scrape-Ergebnis');
 
-  const cover = d.coverUrl ? stripQuery(d.coverUrl) : null;
+  const note = langNote(lang), cover = d.coverUrl ? stripQuery(d.coverUrl) : null;
   const amen = (d.amenities || []).filter((a) => a.available).map((a) => a.name).join(', ');
   const sleeping = (d.sleeping || []).map((s) => `${s.room}: ${s.beds}`).join('; ');
 
   let analysis = null, skipped = [], usage = null, raw = null, chunks = 1;
   if (photos.length > PHOTO_SINGLE) {
-    const r = await analyzeChunked(d, photos, cover, amen, sleeping);
+    const r = await analyzeChunked(d, photos, cover, amen, sleeping, note);
     ({ analysis, skipped, usage, chunks } = r);
   } else {
     const imgs = await mapLimit(photos, 5, (p) => fetchImageB64(p.url));
@@ -659,7 +663,7 @@ async function analyzePhotos(d) {
       content.push({ type: 'text', text: `Foto ${p.position} · Beschriftung: ${p.caption ?? '–'}${cover && p.url === cover ? ' · ist das aktuelle TITELBILD' : ''}` });
       content.push({ type: 'image', source: { type: 'base64', media_type: img.type, data: img.data } });
     });
-    content.push({ type: 'text', text: PHOTO_INSTRUCTIONS });
+    content.push({ type: 'text', text: PHOTO_INSTRUCTIONS + note });
     const j = await claude(content, 8000);
     const text = textOf(j);
     analysis = parseJson(text); usage = j.usage ?? null; if (!analysis) raw = text;
@@ -667,6 +671,7 @@ async function analyzePhotos(d) {
   return {
     ok: true,
     listingId: d.listingId,
+    lang: lang === 'en' ? 'en' : 'de',
     analyzedAt: new Date().toISOString(),
     sig: photoSig(d),
     model: PHOTO_MODEL,
@@ -681,10 +686,10 @@ async function analyzePhotos(d) {
   };
 }
 
-function startPhotos(d) {
-  const id = d.listingId;
+function startPhotos(d, lang) {
+  const id = pkey(d.listingId, lang);
   if (photoJobs.has(id)) return photoJobs.get(id);
-  const p = withTimeout(analyzePhotos(d), PHOTO_TIMEOUT)
+  const p = withTimeout(analyzePhotos(d, lang), PHOTO_TIMEOUT)
     .then((r) => { photoErr.delete(id); photoCacheSet(r); return r; })
     .catch((e) => { photoErr.set(id, { message: e.message, at: new Date().toISOString() }); throw e; })
     .finally(() => photoJobs.delete(id));
@@ -776,25 +781,27 @@ const server = http.createServer(async (req, res) => {
       const id = idFrom(sp.get('id') || sp.get('url'));
       const refresh = sp.get('refresh') === '1';
       const asyncMode = sp.get('async') === '1';
+      const lang = sp.get('lang') === 'en' ? 'en' : 'de', pk = pkey(id, lang);
       const d = cache.get(id);
-      const hit = photoCache.get(id);
+      const hit = photoCache.get(pk);
       if (!refresh && hit && (!d || hit.sig === photoSig(d))) {
         return send(res, 200, { ...hit, cache: { hit: true } }, pretty);
       }
+      if (sp.get('only') === '1') return send(res, 404, { ok: false, status: 'none', id, lang }, pretty);   // nur Zwischengespeichertes, nie eine Analyse starten
       if (!d) throw httpError(404, 'Kein Scrape-Ergebnis im Cache. Zuerst /scrape?url=… ausführen.');
       if (!ANTHROPIC_API_KEY) throw httpError(503, 'ANTHROPIC_API_KEY ist in den Railway-Variablen nicht gesetzt');
       if (asyncMode) {
-        startPhotos(d);
-        return send(res, 202, { ok: true, status: 'running', id, hint: 'Nach ca. 60–120 s erneut unter /analyze-photos?id=… abrufen', lastError: photoErr.get(id) ?? null }, pretty);
+        startPhotos(d, lang);
+        return send(res, 202, { ok: true, status: 'running', id, hint: 'Nach ca. 60–120 s erneut unter /analyze-photos?id=… abrufen', lastError: photoErr.get(pk) ?? null }, pretty);
       }
-      if (photoJobs.has(id) && sp.get('wait') === '0') {
+      if (photoJobs.has(pk) && sp.get('wait') === '0') {
         return send(res, 202, { ok: true, status: 'running', id }, pretty);
       }
-      const r = await startPhotos(d);
+      const r = await startPhotos(d, lang);
       return send(res, 200, { ...r, cache: { hit: false } }, pretty);
     }
 
-    send(res, 404, { error: 'Endpunkte: /scrape?url=…[&async=1][&refresh=1][&slim=1], /cached?id=…, /analyze-photos?id=…[&async=1][&refresh=1], /cache, /health' });
+    send(res, 404, { error: 'Endpunkte: /scrape?url=…[&async=1][&refresh=1][&slim=1], /cached?id=…, /analyze-photos?id=…[&lang=en][&only=1][&async=1][&refresh=1], /cache, /health' });
   } catch (e) {
     send(res, e.status || 500, { ok: false, error: e.message }, pretty);
   }
