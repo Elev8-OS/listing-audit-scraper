@@ -14,6 +14,11 @@ const SWAPS = [
   // Textvorschläge folgen der gewählten Sprache (nicht der Sprache des Inserats)
   ['Die Vorschläge bleiben in der Sprache des Inserats (Deutsch).', 'Die Vorschläge sind in der gewählten Sprache geschrieben.'],
   ['Suggestions stay in the listing’s language (German).', 'Suggestions are written in the language you selected.'],
+  // Meta-Ads-Landingpage: Nutzen statt Neugier in der Headline, klarer Einstieg, konkreter Button
+  ['Wie gesund ist dein Inserat?', 'Wie viele Buchungen verschenkt dein Inserat?'], ['How healthy is your listing?', 'How many bookings is your listing giving away?'],
+  ['Wir lesen dein Airbnb-Inserat, legen Bewertungen, Markt und Preise daneben und zeigen dir, was dich Buchungen kostet. Mit fertigen Texten und einem Plan, den du heute starten kannst.', 'Füge deinen Airbnb-Link ein. In einer Minute siehst du, was dein Inserat kostet, mit fertigen Texten und einem Plan, den du heute starten kannst.'],
+  ['We read your Airbnb listing, set reviews, market and prices next to it, and show you what it costs you in bookings. With ready-made copy and a plan you can start today.', 'Paste your Airbnb link. In one minute you see what your listing is costing you, with ready-made copy and a plan you can start today.'],
+  ['Listing Health prüfen', 'Mein Inserat prüfen'], ['Check listing health', 'Check my listing'],
   // [alt, neu]: gilt für Seite und Übersetzungstabelle gleichermaßen (deutscher Text ist der Schlüssel)
   ['value="https://www.airbnb.de/rooms/1175211811818785379"', 'placeholder="https://www.airbnb.de/rooms/…"'],
   ['Beispiel-Report mit echten Daten vom 21.10.2026. Beliebige Links live auszuwerten startet mit der Live-Anbindung.', 'Dauert etwa eine Minute. Link kopieren: Airbnb-App, Inserat öffnen, Teilen, Link kopieren.'],
@@ -70,6 +75,12 @@ html.gated .rcard [data-x="print"],html.gated #cta{display:none!important}
 .e8usp .h{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px;font-size:1.05rem}
 .e8usp p{margin:0 0 12px}
 .e8usp .btn{justify-self:start;width:auto}
+/* Meta-Ads: Beispiel-Ergebnis auch auf dem Handy zeigen (vorher unter 980 px ausgeblendet), direkt unter dem Formular */
+@media(max-width:980px){.hero-art{display:block!important;margin-top:8px}.hero-art .peek{transform:none;padding:18px;box-shadow:0 6px 24px rgba(0,0,0,.07)}.hero-art .peek .ringbox{width:72px!important;height:72px!important}.hero-art .peek .ringbox b{font-size:1.35rem}.hero-art:has(.peek)::before{content:attr(data-cap);display:block;margin:0 0 10px;font-size:.78rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3,#85857F)}}
+.consent-bar{position:fixed;left:12px;right:12px;bottom:12px;z-index:90;max-width:560px;margin:0 auto;background:#0A0A0A;color:#fff;border-radius:16px;padding:14px 16px;display:grid;gap:10px;font-size:.86rem;line-height:1.45;box-shadow:0 10px 40px rgba(0,0,0,.35)}
+.consent-bar .cb-row{display:flex;gap:10px;flex-wrap:wrap}
+.consent-bar button{min-height:44px;border-radius:99px;border:1.5px solid #fff;background:transparent;color:#fff;font:inherit;font-weight:700;padding:0 18px;cursor:pointer}
+.consent-bar button.ok{background:#F6BB12;border-color:#F6BB12;color:#0A0A0A}
 `;
 export const patchScript = (js) => SWAPS.reduce((h, [a, b]) => h.split(a).join(b), js);
 export function patchPage(html) {
