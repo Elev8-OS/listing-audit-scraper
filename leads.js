@@ -4,6 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { renderPdf } from './pdf.js';
 import * as ghl from './ghl.js';
+import { sendCapi, META_EVENT } from './capi.js';
 
 const EVENTS = new Set(['scan_start', 'scan_done', 'scan_error', 'gate_view', 'gate_locked_click', 'gate_submit', 'gate_error', 'unlocked', 'print_blocked', 'page_cta_click']);
 const gradeOf = (s) => (s >= 92 ? 'A' : s >= 88 ? 'A–' : s >= 84 ? 'B+' : s >= 78 ? 'B' : s >= 72 ? 'B–' : s >= 66 ? 'C+' : s >= 60 ? 'C' : s >= 50 ? 'D' : 'F');
@@ -23,11 +24,14 @@ export function createLeads(c) {
 
   const ATTR_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid', 'h'];
   const cleanAttr = (a) => { if (!a || typeof a !== 'object') return undefined; const o = {}; for (const k of ATTR_KEYS) if (a[k]) o[k] = String(a[k]).replace(/[^\w.\-~:+% ]/g, '').slice(0, 60); return Object.keys(o).length ? o : undefined; };
+  const cleanFb = (f) => (f && typeof f === 'object' ? { fbp: String(f.fbp || '').slice(0, 80), fbc: String(f.fbc || '').slice(0, 220) } : {});
+  const ctx = (req, p) => ({ ip: ipOf(req), ua: req.headers['user-agent'], url: base(req) + '/', sid: String(p.sid || '').slice(0, 24), fb: cleanFb(p.fb) });
   async function event(req, res) {
     if (limited('ev:' + ipOf(req), 300, 3600e3)) return json(res, 429, { ok: false });
-    let p; try { p = JSON.parse(await body(req, 2048)); } catch { return json(res, 400, { ok: false }); }
+    let p; try { p = JSON.parse(await body(req, 4096)); } catch { return json(res, 400, { ok: false }); }
     if (!EVENTS.has(p.e)) return json(res, 400, { ok: false });
     ev(p.e, { sid: String(p.sid || '').slice(0, 24), id: String(p.id || '').replace(/\D/g, '').slice(0, 24) || undefined, score: Number.isFinite(p.score) ? p.score : undefined, zone: p.zone ? String(p.zone).slice(0, 24) : undefined, lang: p.lang === 'en' ? 'en' : 'de', attr: cleanAttr(p.a) });
+    if (p.c === 1 && META_EVENT[p.e]) sendCapi({ ...ctx(req, p), name: META_EVENT[p.e], custom: p.e === 'gate_view' ? { content_name: 'listing_health_report' } : undefined });   // nur mit Einwilligung (c=1), ohne zu warten
     return json(res, 200, { ok: true });
   }
 
@@ -70,6 +74,7 @@ export function createLeads(c) {
     append('leads.jsonl', rec); console.log('LEAD', JSON.stringify(rec)); ev('lead_saved', { sid: rec.sid || rec.id, id: rec.listingId, lang: rec.lang });
     const hook = process.env.LEAD_WEBHOOK_URL;
     if (hook) { try { const w = await fetch(hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(rec), signal: AbortSignal.timeout(8000) }); if (!w.ok) throw new Error('Webhook ' + w.status); } catch (e) { console.error('LEAD-Webhook fehlgeschlagen', e.message); } }
+    if (p.px === 1) sendCapi({ ...ctx(req, p), name: 'Lead', email, phone: rec.phone, custom: { content_name: 'listing_health_report' } });   // Meta Lead, dedupliziert mit dem Pixel über sid:Lead
     json(res, 200, { ok: true, token: rec.token });
     deliver(rec, base(req)).catch((e) => console.error('LEAD-LIEFERUNG', e.message));
   }

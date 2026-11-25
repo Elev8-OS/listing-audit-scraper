@@ -39,6 +39,13 @@
   /* 4. Meta Pixel: nur mit Einwilligung, Standard-Events für die Anzeigenoptimierung */
   const PID = String(window.LH_PIXEL || '').replace(/\D/g, '');
   let loaded = false;
+  window.LH_CONSENT = store.get('lh_px') === '1';
+  const cookie = (n) => { const m = document.cookie.match(new RegExp('(?:^|; )' + n + '=([^;]*)')); return m ? decodeURIComponent(m[1]) : ''; };
+  /* fbp/fbc für die Zuordnung auf Meta-Seite (Conversions API); fbc wird bei fehlendem Cookie aus fbclid gebaut */
+  const fbcFallback = attr.fbclid ? `fb.1.${Date.now()}.${attr.fbclid}` : '';   // einmal berechnet, damit der Wert stabil bleibt
+  window.lhFb = () => ({ fbp: cookie('_fbp'), fbc: cookie('_fbc') || fbcFallback });
+  let sid = ''; try { sid = sessionStorage.getItem('lh_sid') || ''; } catch (e) { }
+  const track = (kind, name, params) => window.fbq(kind, name, params || {}, { eventID: `${sid}:${name}` });   // gleiche ID wie auf dem Server, Meta dedupliziert
   function loadPixel() {
     if (!PID || loaded) return; loaded = true;
     /* Standard-Snippet von Meta */
@@ -48,10 +55,10 @@
   /* wird von gate.js bei jedem Event aufgerufen */
   window.lhTrack = (e) => {
     if (!PID || store.get('lh_px') !== '1' || !window.fbq) return;
-    if (e === 'scan_start') window.fbq('trackCustom', 'AuditStart');
-    else if (e === 'gate_view') window.fbq('track', 'ViewContent', { content_name: 'listing_health_report' });
-    else if (e === 'unlocked') window.fbq('track', 'Lead', { content_name: 'listing_health_report' });
-    else if (e === 'page_cta_click') window.fbq('track', 'Schedule');
+    if (e === 'scan_start') track('trackCustom', 'AuditStart');
+    else if (e === 'gate_view') track('track', 'ViewContent', { content_name: 'listing_health_report' });
+    else if (e === 'unlocked') track('track', 'Lead', { content_name: 'listing_health_report' });
+    else if (e === 'page_cta_click') track('track', 'Schedule');
   };
 
   function renderBar() {
@@ -62,7 +69,7 @@
   }
   document.addEventListener('click', (e) => {
     const b = e.target.closest && e.target.closest('#consentBar [data-c]'); if (!b) return;
-    store.set('lh_px', b.getAttribute('data-c')); if (b.getAttribute('data-c') === '1') loadPixel(); renderBar();
+    store.set('lh_px', b.getAttribute('data-c')); window.LH_CONSENT = b.getAttribute('data-c') === '1'; if (window.LH_CONSENT) loadPixel(); renderBar();
   });
   if (store.get('lh_px') === '1') loadPixel();
 
