@@ -5,7 +5,7 @@
   const L = (de, en) => (state.lang === 'en' ? en : de);
   const G = { unlocked: PDFMODE, id: null, mk: null, token: Q.get('k') || null, scanned: false, viewed: false };
   let sid = ''; try { sid = sessionStorage.getItem('lh_sid') || ''; if (!sid) { sid = Math.random().toString(36).slice(2, 12); sessionStorage.setItem('lh_sid', sid); } } catch (e) { sid = Math.random().toString(36).slice(2, 12); }
-  const ev = (e, o = {}) => { if (PDFMODE) return; try { const b = JSON.stringify({ e, sid, id: G.id || undefined, lang: state.lang, ...o }); if (navigator.sendBeacon) navigator.sendBeacon('/api/event', new Blob([b], { type: 'application/json' })); else fetch('/api/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: b, keepalive: true }); } catch (x) { } };
+  const ev = (e, o = {}) => { if (PDFMODE) return; try { const b = JSON.stringify({ e, sid, id: G.id || undefined, lang: state.lang, a: window.LH_ATTR || undefined, c: window.LH_CONSENT ? 1 : undefined, fb: window.LH_CONSENT && window.lhFb ? window.lhFb() : undefined, ...o }); try { if (window.lhTrack) window.lhTrack(e, o); } catch (z) { } if (navigator.sendBeacon) navigator.sendBeacon('/api/event', new Blob([b], { type: 'application/json' })); else fetch('/api/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: b, keepalive: true }); } catch (x) { } };
   const gated = () => !G.unlocked && !!state.reportLive && state.mode === 'prospect';   // immer true/false: toggle(..., undefined) wuerde umschalten
 
   /* Daten aus der Report-Abfrage mitlesen */
@@ -140,7 +140,7 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail) || !document.getElementById('gConsent').checked) { err.textContent = L('Bitte E-Mail prüfen und der Zusendung zustimmen.', 'Please check your email and agree to receive it.'); ev('gate_error', { zone: 'input' }); return; }
     ev('gate_submit'); btn.disabled = true; btn.textContent = L('Wird gesendet …', 'Sending …');
     let base = {}; try { base = leadPayload() || {}; } catch (x) { }
-    const p = { ...base, email: mail, consent: { given: true, at: new Date().toISOString(), text: document.querySelector('#gateForm .gcons span').textContent }, report: { id: G.id, lang: state.lang }, sid, gate: true, view: 'prospect', lang: state.lang, openedAreas: Array.from(state.clicks || []).slice(0, 40) };
+    const p = { ...base, email: mail, consent: { given: true, at: new Date().toISOString(), text: document.querySelector('#gateForm .gcons span').textContent }, report: { id: G.id, lang: state.lang }, sid, attr: window.LH_ATTR || undefined, px: window.LH_CONSENT ? 1 : undefined, fb: window.LH_CONSENT && window.lhFb ? window.lhFb() : undefined, gate: true, view: 'prospect', lang: state.lang, openedAreas: Array.from(state.clicks || []).slice(0, 40) };
     try {
       const r = await fetch('/api/lead', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }), j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error || r.status);

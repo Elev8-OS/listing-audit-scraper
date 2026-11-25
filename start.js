@@ -34,7 +34,7 @@ const IP_WINDOW = Number(process.env.IP_WINDOW_H || 168) * 3600e3;
 const read = (f) => { try { return fs.readFileSync(new URL(f, import.meta.url), 'utf8'); } catch { return null; } };
 const uiHtml = read('./ui.html') || '';
 const liveJs = (f) => patchScript(read('./' + f) || '');
-const injectLive = (h) => (h.includes('/live.js') ? h : h.replace('</body>', '<script src="/live.js"></script><script src="/live2.js"></script><script src="/gate.js"></script></body>'));
+const injectLive = (h) => (h.includes('/live.js') ? h : h.replace('</body>', `<script>window.LH_PIXEL=${JSON.stringify(String(process.env.META_PIXEL_ID || '').replace(/\D/g, ''))}</script><script src="/live.js"></script><script src="/live2.js"></script><script src="/gate.js"></script><script src="/ads.js"></script></body>`));
 const BK_OLD = "const BOOKING_URL = 'https://elev8-suite.com';";   // Platzhalter in der Seite, wird mit BOOKING_URL aus Railway ersetzt
 const pageHtml = () => patchPage(injectLive(read('./public/index.html') || '<!doctype html><meta charset="utf-8"><title>Listing Health</title><p style="font:16px system-ui;padding:40px">Die Seite ist noch nicht hochgeladen (public/index.html fehlt).</p>').replace(BK_OLD, () => (process.env.BOOKING_URL ? `const BOOKING_URL = ${JSON.stringify(process.env.BOOKING_URL)};` : BK_OLD)));
 
@@ -239,7 +239,7 @@ http.createServer = (...args) => {
       if (req.method === 'GET' && p === '/api/pdf-test') return await LG.pdfTest(req, res, u);
       if (req.method === 'GET' && p === '/api/photo-check') return await handlePhotoCheck(req, res, u);
       if (req.method === 'GET' && p === '/api/report') return await handleReport(req, res, u);
-      if (req.method === 'GET' && (p === '/live.js' || p === '/live2.js' || p === '/gate.js')) { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' }); return res.end(liveJs(p.slice(1))); }
+      if (req.method === 'GET' && (p === '/live.js' || p === '/live2.js' || p === '/gate.js' || p === '/ads.js')) { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' }); return res.end(liveJs(p.slice(1))); }
     } catch (e) { return json(res, 500, { ok: false, error: 'Interner Fehler' }); }
     return handler(req, res);
   });
