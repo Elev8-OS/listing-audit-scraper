@@ -111,9 +111,9 @@ async function steps(id, url, j, lang) {
     let done = false, refreshed = false;
     for (let i = 0; i < 90 && !done; i++) {
       const r = await local(`/analyze-photos?id=${id}&async=1&lang=${lang}`);
-      if (r.status === 200) { if (getAnalysis(r.json)) done = true; else if (!refreshed) { refreshed = true; await local(`/analyze-photos?id=${id}&async=1&refresh=1&lang=${lang}`); await sleep(6000); } else throw new Error('Foto-Analyse fehlgeschlagen'); }
-      else if (r.status >= 400) throw new Error((r.json && r.json.error) || 'Foto-Analyse fehlgeschlagen');
-      else if (r.json && r.json.lastError) throw new Error('Foto-Analyse fehlgeschlagen');
+      if (r.status === 200) { if (getAnalysis(r.json)) done = true; else if (!refreshed) { refreshed = true; await local(`/analyze-photos?id=${id}&async=1&refresh=1&lang=${lang}`); await sleep(6000); } else { console.error('FOTO-CHECK', id, 'keine lesbare Analyse', JSON.stringify({ raw: String((r.json && r.json.raw) || '').length, skipped: (r.json && r.json.skipped || []).length, photos: r.json && r.json.photosTotal })); throw new Error('Foto-Analyse fehlgeschlagen'); } }
+      else if (r.status >= 400) { console.error('FOTO-CHECK', id, r.status, JSON.stringify(r.json && r.json.error)); throw new Error((r.json && r.json.error) || 'Foto-Analyse fehlgeschlagen'); }
+      else if (r.json && r.json.lastError) { console.error('FOTO-CHECK', id, 'lastError', JSON.stringify(r.json.lastError)); throw new Error('Foto-Analyse fehlgeschlagen'); }
       else await sleep(6000);
     }
     if (!done) throw new Error('Die Foto-Analyse dauert zu lange');

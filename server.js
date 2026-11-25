@@ -527,6 +527,7 @@ async function claude(content, maxTokens) {   // mit Wiederholung bei Ueberlastu
     const j = await r.json().catch(() => ({}));
     if (r.ok) return j;
     last = httpError(502, `Anthropic ${r.status}: ${j?.error?.message || 'Fehler'}`);
+    console.error('ANTHROPIC', r.status, j?.error?.type || '', String(j?.error?.message || '').slice(0, 200), `(Versuch ${i + 1}/4, ${PHOTO_MODEL})`);
     if (![429, 500, 502, 503, 529].includes(r.status)) throw last;
     const wait = Math.min(30, Number(r.headers.get('retry-after')) || 5 * (i + 1));
     await new Promise((res) => setTimeout(res, wait * 1000));
@@ -691,7 +692,7 @@ function startPhotos(d, lang) {
   if (photoJobs.has(id)) return photoJobs.get(id);
   const p = withTimeout(analyzePhotos(d, lang), PHOTO_TIMEOUT)
     .then((r) => { photoErr.delete(id); photoCacheSet(r); return r; })
-    .catch((e) => { photoErr.set(id, { message: e.message, at: new Date().toISOString() }); throw e; })
+    .catch((e) => { photoErr.set(id, { message: e.message, at: new Date().toISOString() }); console.error('FOTO-ANALYSE', id, String(e.message).slice(0, 300)); throw e; })
     .finally(() => photoJobs.delete(id));
   p.catch(() => {});
   photoJobs.set(id, p);
