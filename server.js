@@ -641,6 +641,13 @@ async function analyzeChunked(d, photos, cover, amen, sleeping, note) {
 
 async function analyzePhotos(d, lang) {
   if (!ANTHROPIC_API_KEY) throw httpError(503, 'ANTHROPIC_API_KEY ist in den Railway-Variablen nicht gesetzt');
+  if (!(d.photos || []).length && process.env.AIRROI_API_KEY && d.listingId) {   // Fallback: Fotoliste von AirROI, wenn der Scrape keine geliefert hat
+    try {
+      const r = await fetch(`${(process.env.AIRROI_BASE_URL || 'https://api.airroi.com').replace(/\/+$/, '')}/listings?id=${encodeURIComponent(d.listingId)}`, { headers: { 'x-api-key': process.env.AIRROI_API_KEY }, signal: AbortSignal.timeout(20000) });
+      const urls = r.ok ? ((await r.json())?.listing_info?.photo_urls || []) : [];
+      if (urls.length) { d.photos = urls.map((u, i) => ({ position: i + 1, url: stripQuery(u), caption: null, id: null })); console.log('FOTO-FALLBACK', d.listingId, 'AirROI', urls.length); }
+    } catch (e) { console.error('FOTO-FALLBACK', d.listingId, String(e.message).slice(0, 120)); }
+  }
   const all = d.photos || [], photos = PHOTO_MAX > 0 ? all.slice(0, PHOTO_MAX) : all;
   if (!photos.length) throw httpError(422, 'Keine Fotos im Scrape-Ergebnis');
 
