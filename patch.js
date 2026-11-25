@@ -2,6 +2,8 @@
 // Wird beim Ausliefern auf die Seite angewendet, die Seitendatei selbst bleibt unverändert.
 const d = (x) => x.split('§{').join('${');   // § steht für das Dollarzeichen vor der geschweiften Klammer, damit der Quelltext lesbar bleibt
 const SWAPS = [
+  // Sprache: Texte, die live.js setzt und die im Woerterbuch fehlten
+  ['const EN = {', "const EN = {\n'Preis- und Belegungsvergleich mit dem Umkreis.': 'Price and occupancy comparison with the surrounding area.',\n'Wie liegt dein Preis im Vergleich zum Umkreis?': 'How does your price compare with the surrounding area?',\n'Welche Inserate verdienen am meisten und warum?': 'Which listings earn the most, and why?',"],
   // Foto-Nummern: Auf jeder Kachel stehen beide Nummern, Airbnb und neue Position; Zahlen in Texten sind Airbnb-Nummern
   [d('<img src="§{esc(ph.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer"><b class="pnum">§{i + 1}</b>'), d('<img src="§{esc(ph.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer"><b class="pnum">§{isEn() ? \'New\' : \'Neu\'} §{i + 1}</b><span class="pabn">Airbnb §{pos}</span>')],
   [d('<li class="ptile" draggable="true" data-lp="§{pos}">'), d('<li class="ptile" draggable="true" data-lp="§{pos}" title="Airbnb §{pos} · §{isEn() ? \'New\' : \'Neu\'} §{i + 1}">')],

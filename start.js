@@ -167,7 +167,7 @@ async function handleReport(req, res, u) {
   if (!j) {
     const have = await result(id, lang), known = !!have || !!(await result(id, lang === 'en' ? 'de' : 'en'));   // schon analysiert (in irgendeiner Sprache): zählt nicht gegen das Limit
     if (!known && (limited('ip:' + ipOf(req), IP_LIMIT, IP_WINDOW) || limited('day:' + dayKey(), DAILY_LIMIT, 864e5))) return json(res, 429, { ok: false, status: 'limit', error: E('Du hast diese Woche schon drei Analysen genutzt, oder heute sind alle vergeben. Buche einen Demo-Call, dann prüfen wir dein Inserat.', lang) });
-    j = { status: 'running', step: have ? 'report' : 'scrape', startedAt: Date.now() }; jobs.set(k, j); runReport(id, `https://www.airbnb.de/rooms/${id}`, lang, j);
+    j = { status: 'running', step: have ? 'report' : 'scrape', startedAt: Date.now() }; jobs.set(k, j); runReport(id, `https://www.airbnb.${lang === 'en' ? 'com' : 'de'}/rooms/${id}`, lang, j);   // englische Seite liefert Ausstattungsnamen auf Englisch
   }
   if (j.status === 'done') { const pc = await result(id, lang), rp = cachedReport(k); if (pc && rp) return json(res, 200, { ok: true, status: 'done', id, report: rp, photoCheck: pc }); }
   if (j.status === 'error') return json(res, 502, { ok: false, status: 'error', id, error: E(j.error, lang) });
