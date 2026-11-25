@@ -64,6 +64,8 @@ html.scanned .hero-art{display:none!important}
 html.gated #plan,html.gated #studio,html.gated #fotos,html.gated #luecke,html.gated #markt,html.gated #wettbewerb{display:none!important}
 html.gated #befunde>header .sub{display:none}
 html.gated #tiles .tile{cursor:pointer}
+.gate .gch{display:flex;gap:4px;background:var(--line,#E6E6E1);padding:4px;border-radius:99px}.gate .gch button{flex:1;min-height:42px;border:0;border-radius:99px;background:transparent;font:inherit;font-weight:700;cursor:pointer;color:var(--ink2,#4B4B47)}.gate .gch button.on{background:#0A0A0A;color:#fff}
+.gate input[type=tel]{min-height:50px;border:1.5px solid var(--line,#E6E6E1);border-radius:14px;padding:0 16px;font:inherit;background:var(--bg,#fff);color:var(--ink,#0A0A0A)}.gate input[type=tel]:focus{outline:none;border-color:var(--ink,#0A0A0A);box-shadow:0 0 0 4px rgba(246,187,18,.3)}
 html.gated #tiles .tile p{color:transparent!important;user-select:none;-webkit-user-select:none;height:42px;overflow:hidden;border-radius:6px;background:linear-gradient(#E6E6E1,#E6E6E1) 0 5px/94% 9px no-repeat,linear-gradient(#E6E6E1,#E6E6E1) 0 23px/62% 9px no-repeat}
 html.gated #tiles .tile .more{font-size:0}
 html.gated #tiles .tile .more svg{display:none}
@@ -79,6 +81,21 @@ html.gated #tiles .tile .more::after{content:attr(data-lk);font-size:.88rem;font
     if (!g) { g = document.createElement('section'); g.id = 'gate'; g.className = 'gate'; const b = document.getElementById('befunde'); if (b) b.insertAdjacentElement('afterend', g); else return null; }
     return g;
   }
+  const normPhone = (v) => { let t = String(v || '').trim().replace(/[\s().\-\/]/g, ''); if (t.startsWith('00')) t = '+' + t.slice(2); return /^\+[1-9]\d{7,14}$/.test(t) ? t : ''; };
+  const consentText = (ch) => (ch === 'whatsapp'
+    ? L('Ich möchte den Report per WhatsApp erhalten und bin einverstanden, dass Elev8 mich dazu per WhatsApp und Telefon kontaktiert.', 'I want to receive the report by WhatsApp and agree that Elev8 contacts me about it by WhatsApp and phone.')
+    : L('Ich möchte den Report per E-Mail erhalten und bin einverstanden, dass Elev8 mich dazu kontaktiert.', 'I want to receive the report by email and agree that Elev8 contacts me about it.'));
+  function setCh(ch) {
+    G.ch = ch === 'whatsapp' ? 'whatsapp' : 'email';
+    const i = document.getElementById('gMail'), t = document.getElementById('gConsTxt'); if (!i || !t) return;
+    const wa = G.ch === 'whatsapp'; i.type = wa ? 'tel' : 'email'; i.setAttribute('autocomplete', wa ? 'tel' : 'email'); i.setAttribute('inputmode', wa ? 'tel' : 'email');
+    i.placeholder = wa ? L('Deine WhatsApp-Nummer, z. B. +41 79 123 45 67', 'Your WhatsApp number, e.g. +41 79 123 45 67') : L('Deine E-Mail-Adresse', 'Your email address');
+    i.setAttribute('aria-label', wa ? L('WhatsApp-Nummer', 'WhatsApp number') : L('E-Mail-Adresse', 'Email address')); i.value = '';
+    t.textContent = consentText(G.ch);
+    document.querySelectorAll('#gateForm [data-ch]').forEach((b) => { const on = b.getAttribute('data-ch') === G.ch; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+    const e = document.getElementById('gErr'); if (e) e.textContent = '';
+  }
+  document.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('#gateForm [data-ch]'); if (b) { setCh(b.getAttribute('data-ch')); ev('gate_channel', { zone: G.ch }); } });
   function renderGate() {
     const g = gateCard(); if (!g) return;
     if (g.classList.contains('done')) { if (!gated()) return; g.classList.remove('done'); g.innerHTML = ''; delete g.dataset.lang; }   // neues Inserat: Gate wieder aufbauen
@@ -88,9 +105,9 @@ html.gated #tiles .tile .more::after{content:attr(data-lk);font-size:.88rem;font
     g.innerHTML = `<div><h2>${L('Dein Plan ist fertig. Wohin sollen wir ihn schicken?', 'Your plan is ready. Where should we send it?')}</h2>
       ${pot ? `<p class="money">${L('Dein Inserat lässt geschätzt', 'Your listing leaves an estimated')} ${cur} <i>${String(pot).replace(/\d/g, '8').replace(/\B(?=(\d{3})+(?!\d))/g, '’')}</i> ${L('pro Jahr liegen.', 'a year on the table.')}</p>` : ''}
       <p>${L('Du siehst oben, was auffällt. Im Report steht, was du dagegen tust:', 'Above you see what stands out. The report shows what to do about it:')}</p>
-      <ul><li>${L(`${n} Maßnahmen${hi ? `, ${hi} mit hoher Wirkung,` : ''} mit fertigen Texten`, `${n} actions${hi ? `, ${hi} with high impact,` : ''} with ready-made copy`)}</li><li>${L('Alle Befunde mit Begründung und Lösung', 'Every finding with the reason and the fix')}</li><li>${L('Neuer Titel und neue Beschreibung, fertig zum Kopieren', 'New title and description, ready to copy')}</li><li>${ph ? L(`Foto-Reihenfolge für ${ph} Fotos und Ersetzen-Liste`, `Photo order for ${ph} photos and replace list`) : L('Foto-Reihenfolge und Ersetzen-Liste', 'Photo order and replace list')}</li><li>${L('Marktvergleich mit den drei Besten im Umkreis', 'Market comparison with the three best nearby')}</li><li>${L('Ein Klick an alle Kanäle: mit der Elev8 Suite', 'One click to all channels: with Elev8 Suite')}</li><li>${L('Alles als PDF per E-Mail', 'All of it as a PDF by email')}</li></ul></div>
-      <form id="gateForm" novalidate><input id="gMail" type="email" autocomplete="email" inputmode="email" placeholder="${L('Deine E-Mail-Adresse', 'Your email address')}" aria-label="${L('E-Mail-Adresse', 'Email address')}"><label class="gcons"><input id="gConsent" type="checkbox"><span>${L('Ich möchte den Report per E-Mail erhalten und bin einverstanden, dass Elev8 mich dazu kontaktiert.', 'I want to receive the report by email and agree that Elev8 contacts me about it.')}</span></label><button class="btn primary" type="submit" id="gBtn">${L('Report freischalten', 'Unlock report')}</button><div class="err" id="gErr" role="alert"></div></form>`;
-    try { const m = sessionStorage.getItem('lh_mail'); if (m) document.getElementById('gMail').value = m; } catch (x) { }
+      <ul><li>${L(`${n} Maßnahmen${hi ? `, ${hi} mit hoher Wirkung,` : ''} mit fertigen Texten`, `${n} actions${hi ? `, ${hi} with high impact,` : ''} with ready-made copy`)}</li><li>${L('Alle Befunde mit Begründung und Lösung', 'Every finding with the reason and the fix')}</li><li>${L('Neuer Titel und neue Beschreibung, fertig zum Kopieren', 'New title and description, ready to copy')}</li><li>${ph ? L(`Foto-Reihenfolge für ${ph} Fotos und Ersetzen-Liste`, `Photo order for ${ph} photos and replace list`) : L('Foto-Reihenfolge und Ersetzen-Liste', 'Photo order and replace list')}</li><li>${L('Marktvergleich mit den drei Besten im Umkreis', 'Market comparison with the three best nearby')}</li><li>${L('Ein Klick an alle Kanäle: mit der Elev8 Suite', 'One click to all channels: with Elev8 Suite')}</li><li>${L('Alles als PDF, per E-Mail oder WhatsApp', 'All of it as a PDF, by email or WhatsApp')}</li></ul></div>
+      <form id="gateForm" novalidate><div class="gch" role="group" aria-label="${L('Kanal wählen', 'Choose channel')}"><button type="button" data-ch="email" class="on" aria-pressed="true">${L('E-Mail', 'Email')}</button><button type="button" data-ch="whatsapp" aria-pressed="false">WhatsApp</button></div><input id="gMail" type="email" autocomplete="email" inputmode="email" placeholder="${L('Deine E-Mail-Adresse', 'Your email address')}" aria-label="${L('E-Mail-Adresse', 'Email address')}"><label class="gcons"><input id="gConsent" type="checkbox"><span id="gConsTxt"></span></label><button class="btn primary" type="submit" id="gBtn">${L('Report freischalten', 'Unlock report')}</button><div class="err" id="gErr" role="alert"></div></form>`;
+    setCh(G.ch || 'email'); try { const m = sessionStorage.getItem('lh_mail'); if (m && G.ch !== 'whatsapp') document.getElementById('gMail').value = m; } catch (x) { }
     if (!G.viewed) { G.viewed = true; ev('gate_view', { score: Math.round(overall()) }); }
   }
   function lockCards() {
@@ -150,18 +167,19 @@ html.gated #tiles .tile .more::after{content:attr(data-lk);font-size:.88rem;font
   /* Absenden */
   document.addEventListener('submit', async (e) => {
     if (!e.target || e.target.id !== 'gateForm') return; e.preventDefault();
-    const err = document.getElementById('gErr'), mail = document.getElementById('gMail').value.trim(), btn = document.getElementById('gBtn');
+    const err = document.getElementById('gErr'), val = document.getElementById('gMail').value.trim(), btn = document.getElementById('gBtn'), wa = G.ch === 'whatsapp', phone = wa ? normPhone(val) : '', mail = wa ? '' : val;
     err.textContent = '';
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail) || !document.getElementById('gConsent').checked) { err.textContent = L('Bitte E-Mail prüfen und der Zusendung zustimmen.', 'Please check your email and agree to receive it.'); ev('gate_error', { zone: 'input' }); return; }
+    const okIn = wa ? !!phone : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail);
+    if (!okIn || !document.getElementById('gConsent').checked) { err.textContent = wa ? L('Bitte die Nummer mit Landesvorwahl eingeben (z. B. +41 79 123 45 67) und der Zusendung zustimmen.', 'Please enter the number with country code (e.g. +41 79 123 45 67) and agree to receive it.') : L('Bitte E-Mail prüfen und der Zusendung zustimmen.', 'Please check your email and agree to receive it.'); ev('gate_error', { zone: 'input' }); return; }
     ev('gate_submit'); btn.disabled = true; btn.textContent = L('Wird gesendet …', 'Sending …');
     let base = {}; try { base = leadPayload() || {}; } catch (x) { }
-    const p = { ...base, email: mail, consent: { given: true, at: new Date().toISOString(), text: document.querySelector('#gateForm .gcons span').textContent }, report: { id: G.id, lang: state.lang }, sid, attr: window.LH_ATTR || undefined, px: window.LH_CONSENT ? 1 : undefined, fb: window.LH_CONSENT && window.lhFb ? window.lhFb() : undefined, gate: true, view: 'prospect', lang: state.lang, openedAreas: Array.from(state.clicks || []).slice(0, 40) };
+    const p = { ...base, email: mail, phone, consent: { given: true, at: new Date().toISOString(), text: document.querySelector('#gateForm .gcons span').textContent }, report: { id: G.id, lang: state.lang }, sid, attr: window.LH_ATTR || undefined, px: window.LH_CONSENT ? 1 : undefined, fb: window.LH_CONSENT && window.lhFb ? window.lhFb() : undefined, gate: true, view: 'prospect', lang: state.lang, openedAreas: Array.from(state.clicks || []).slice(0, 40) };
     try {
       const r = await fetch('/api/lead', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }), j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error || r.status);
-      G.token = j.token || null; G.unlocked = true; try { sessionStorage.setItem('lh_u_' + G.id, '1'); sessionStorage.setItem('lh_mail', mail); } catch (x) { }
+      G.token = j.token || null; G.unlocked = true; try { sessionStorage.setItem('lh_u_' + G.id, '1'); if (mail) sessionStorage.setItem('lh_mail', mail); } catch (x) { }
       ev('unlocked'); const g = document.getElementById('gate'); g.classList.add('done');
-      g.innerHTML = `<div><h2>${L('Freigeschaltet. Dein Report ist unterwegs.', 'Unlocked. Your report is on its way.')}</h2><p>${L(`Das PDF kommt in wenigen Minuten an ${mail}. Hier siehst du schon alles.`, `The PDF arrives at ${mail} in a few minutes. You can already see everything here.`)}</p>${G.mk && G.mk.potential ? `<p class="money">${L('Dein Inserat lässt geschätzt', 'Your listing leaves an estimated')} ${G.mk.currency || 'CHF'} ${String(G.mk.potential).replace(/\B(?=(\d{3})+(?!\d))/g, '’')} ${L('pro Jahr liegen.', 'a year on the table.')}</p><p style="font-size:.85rem">${L('Schätzung: Abstand zur Belegung des oberen Viertels der Vergleichsinserate, bei gleichem Preis pro Nacht.', 'Estimate: gap to the occupancy of the top quarter of comparable listings, at your current nightly rate.')}</p>` : ''}<div class="row2"><a class="btn primary" href="#plan">${L('Zum Plan', 'To the plan')}</a></div></div>`;
+      g.innerHTML = `<div><h2>${L('Freigeschaltet. Dein Report ist unterwegs.', 'Unlocked. Your report is on its way.')}</h2><p>${wa ? L(`Wir schicken dir den Report in Kürze per WhatsApp an ${phone}. Hier siehst du schon alles.`, `We will send you the report by WhatsApp to ${phone} shortly. You can already see everything here.`) : L(`Das PDF kommt in wenigen Minuten an ${mail}. Hier siehst du schon alles.`, `The PDF arrives at ${mail} in a few minutes. You can already see everything here.`)}</p>${G.mk && G.mk.potential ? `<p class="money">${L('Dein Inserat lässt geschätzt', 'Your listing leaves an estimated')} ${G.mk.currency || 'CHF'} ${String(G.mk.potential).replace(/\B(?=(\d{3})+(?!\d))/g, '’')} ${L('pro Jahr liegen.', 'a year on the table.')}</p><p style="font-size:.85rem">${L('Schätzung: Abstand zur Belegung des oberen Viertels der Vergleichsinserate, bei gleichem Preis pro Nacht.', 'Estimate: gap to the occupancy of the top quarter of comparable listings, at your current nightly rate.')}</p>` : ''}<div class="row2"><a class="btn primary" href="#plan">${L('Zum Plan', 'To the plan')}</a></div></div>`;
       try { bindBook(); } catch (x) { } renderAll(); applyGate();
     } catch (x) { ev('gate_error', { zone: 'server' }); btn.disabled = false; btn.textContent = L('Report freischalten', 'Unlock report'); err.textContent = L('Senden hat nicht geklappt. Bitte versuche es gleich noch einmal.', 'Sending failed. Please try again in a moment.'); }
   });

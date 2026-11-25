@@ -5,8 +5,10 @@ import crypto from 'node:crypto';
 import { renderPdf } from './pdf.js';
 import * as ghl from './ghl.js';
 import { sendCapi, META_EVENT } from './capi.js';
+import { hostSize, TIER_TAG } from './host.js';
 
-const EVENTS = new Set(['scan_start', 'scan_done', 'scan_error', 'gate_view', 'gate_locked_click', 'gate_submit', 'gate_error', 'unlocked', 'print_blocked', 'page_cta_click']);
+const EVENTS = new Set(['scan_start', 'scan_done', 'scan_error', 'gate_view', 'gate_locked_click', 'gate_submit', 'gate_error', 'gate_channel', 'unlocked', 'print_blocked', 'page_cta_click']);
+const normPhone = (s) => { let t = String(s || '').trim().replace(/[\s().\-\/]/g, ''); if (t.startsWith('00')) t = '+' + t.slice(2); return /^\+[1-9]\d{7,14}$/.test(t) ? t : ''; };   // nur internationales Format, sonst leer
 const gradeOf = (s) => (s >= 92 ? 'A' : s >= 88 ? 'A–' : s >= 84 ? 'B+' : s >= 78 ? 'B' : s >= 72 ? 'B–' : s >= 66 ? 'C+' : s >= 60 ? 'C' : s >= 50 ? 'D' : 'F');
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const first = (t, n) => { t = String(t || '').split(/(?<=[.!?])\s/)[0]; return t.length > n ? t.slice(0, n - 1).replace(/\s+\S*$/, '') + '…' : t; };
@@ -54,9 +56,13 @@ export function createLeads(c) {
     }
     if (!ghl.ghlReady()) { ev('mail_skipped', { sid: rec.id }); console.log('GHL nicht konfiguriert (GHL_TOKEN fehlt): keine E-Mail gesendet an', rec.id); return; }
     try {
-      const safe = String(grade).replace('+', 'p').replace('–', 'm').toLowerCase(), contact = await ghl.upsertContact({ email: rec.email, name: rec.name, source: 'Listing Health', tags: ['listing-health', `lh-note-${safe}`, `lh-${rec.lang}`, ...(pdfOk ? [] : ['lh-pdf-fehlt'])] });
-      const note = `Listing Health\nInserat: https://www.airbnb.de/rooms/${rec.listingId}\nScore: ${score ?? '–'} (${grade})\nSprache: ${rec.lang}\nSchwächste Bereiche: ${cs.slice().sort((a, x) => a.base - x.base).slice(0, 3).map((x) => `${x.name} ${x.base}`).join(', ')}\nGeöffnet vor dem Gate: ${(rec.openedAreas || []).join(', ') || '–'}\nPDF: ${pdfOk ? urls.pdf : 'nicht erzeugt'}`;
+      const safe = String(grade).replace('+', 'p').replace('–', 'm').toLowerCase(), sz = rec.size || null,
+        contact = await ghl.upsertContact({ email: rec.email || undefined, phone: rec.phone || undefined, name: rec.name, source: 'Listing Health',
+          tags: ['listing-health', `lh-note-${safe}`, `lh-${rec.lang}`, `lh-channel-${rec.channel}`, TIER_TAG[sz ? sz.tier : 'unknown'], ...(sz && sz.superhost ? ['lh-superhost'] : []), ...(pdfOk ? [] : ['lh-pdf-fehlt'])],
+          fields: { units: sz && sz.units, tier: sz && sz.tier, channel: rec.channel, score: score ?? '', airbnb: rec.listingId ? `https://www.airbnb.de/rooms/${rec.listingId}` : '', pdf: pdfOk ? urls.pdf : '', lang: rec.lang } });
+      const note = `Listing Health\nInserat: https://www.airbnb.de/rooms/${rec.listingId}\nScore: ${score ?? '–'} (${grade})\nSprache: ${rec.lang}\nSchwächste Bereiche: ${cs.slice().sort((a, x) => a.base - x.base).slice(0, 3).map((x) => `${x.name} ${x.base}`).join(', ')}\nGeöffnet vor dem Gate: ${(rec.openedAreas || []).join(', ') || '–'}\nKanal: ${rec.channel === 'whatsapp' ? 'WhatsApp ' + rec.phone : 'E-Mail'}\nGastgeber: ${sz && sz.units ? `${sz.units} Inserate (${sz.tier}; Hauptgastgeber ${sz.asHost}, Co-Host ${sz.asCohost}${sz.superhost ? ', Superhost' : ''})` : 'unbekannt'}\nPDF: ${pdfOk ? urls.pdf : 'nicht erzeugt'}`;
       await ghl.addNote(contact.id, note).catch((e) => console.error('GHL-Notiz', e.message));
+      if (!rec.email) { ev('wa_pending', { sid: rec.id, pdf: pdfOk, tier: sz ? sz.tier : 'unknown' }); return; }   // nur WhatsApp: den Versand übernimmt die GHL-Automation (Tag lh-channel-whatsapp), Link steht in Notiz und Feld
       const subject = rec.lang === 'en' ? `Your Listing Health report: ${(rep && rep.listing && rep.listing.name) || ''} (grade ${grade})` : `Dein Listing-Health-Report: ${(rep && rep.listing && rep.listing.name) || ''} (Note ${grade})`, html = mailHtml(rec, rep, score ?? '–', grade, urls, pdfOk);
       try { await ghl.sendEmail({ contactId: contact.id, subject, html, attachments: pdfOk ? [urls.pdf] : [] }); }
       catch (e) { if (!pdfOk) throw e; console.error('GHL-Anhang abgelehnt, sende ohne Anhang:', e.message); await ghl.sendEmail({ contactId: contact.id, subject, html }); }
@@ -64,19 +70,26 @@ export function createLeads(c) {
     } catch (e) { ev('mail_failed', { sid: rec.id }); console.error('GHL', rec.id, e.message); }
   }
 
+  /** Im Hintergrund nach der Freischaltung: Grösse des Airbnb-Accounts bestimmen, Webhook, dann PDF und GHL. */
+  async function afterLead(rec, b) {
+    const size = await hostSize(rec.listingId);
+    if (size) { rec.size = size; ev('lead_enriched', { sid: rec.id, units: size.units, tier: size.tier }); }
+    const hook = process.env.LEAD_WEBHOOK_URL;
+    if (hook) { try { const w = await fetch(hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(rec), signal: AbortSignal.timeout(8000) }); if (!w.ok) throw new Error('Webhook ' + w.status); } catch (e) { console.error('LEAD-Webhook fehlgeschlagen', e.message); } }
+    await deliver(rec, b);
+  }
+
   async function lead(req, res) {
     if (limited('lead:' + ipOf(req), 5, 3600e3)) return json(res, 429, { ok: false, error: 'Zu viele Anfragen. Bitte später erneut versuchen.' });
     let p; try { p = JSON.parse(await body(req, 16384)); } catch (e) { return json(res, e.status || 400, { ok: false, error: 'Ungültige Anfrage' }); }
-    const email = String(p.email || '').trim(), consent = p.consent && p.consent.given === true;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !consent) return json(res, 422, { ok: false, error: 'E-Mail oder Einwilligung fehlt' });
+    const mailIn = String(p.email || '').trim(), email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mailIn) ? mailIn : '', phone = normPhone(p.phone), consent = p.consent && p.consent.given === true;
+    if ((!email && !phone) || !consent) return json(res, 422, { ok: false, error: 'E-Mail oder WhatsApp-Nummer oder Einwilligung fehlt' });
     const r = p.report || {}, id = crypto.randomBytes(5).toString('hex');
-    const rec = { id, token: `${id}.${sign(id)}`, receivedAt: new Date().toISOString(), name: String(p.name || '').slice(0, 120), email: email.slice(0, 200), phone: String(p.phone || '').slice(0, 40), consent: p.consent, listing: p.listing || null, listingId: String(r.id || '').replace(/\D/g, '').slice(0, 24), lang: r.lang === 'en' || p.lang === 'en' ? 'en' : 'de', score: p.score || null, view: p.view || null, topFindings: (p.topFindings || []).slice(0, 5), openedAreas: (p.openedAreas || []).slice(0, 40), gate: !!p.gate, sid: String(p.sid || '').slice(0, 24), attr: cleanAttr(p.attr), source: 'listing-health' };
+    const rec = { id, token: `${id}.${sign(id)}`, receivedAt: new Date().toISOString(), name: String(p.name || '').slice(0, 120), email: email.slice(0, 200), phone, channel: email ? 'email' : 'whatsapp', consent: p.consent, listing: p.listing || null, listingId: String(r.id || '').replace(/\D/g, '').slice(0, 24), lang: r.lang === 'en' || p.lang === 'en' ? 'en' : 'de', score: p.score || null, view: p.view || null, topFindings: (p.topFindings || []).slice(0, 5), openedAreas: (p.openedAreas || []).slice(0, 40), gate: !!p.gate, sid: String(p.sid || '').slice(0, 24), attr: cleanAttr(p.attr), source: 'listing-health' };
     append('leads.jsonl', rec); console.log('LEAD', JSON.stringify(rec)); ev('lead_saved', { sid: rec.sid || rec.id, id: rec.listingId, lang: rec.lang });
-    const hook = process.env.LEAD_WEBHOOK_URL;
-    if (hook) { try { const w = await fetch(hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(rec), signal: AbortSignal.timeout(8000) }); if (!w.ok) throw new Error('Webhook ' + w.status); } catch (e) { console.error('LEAD-Webhook fehlgeschlagen', e.message); } }
-    if (p.px === 1) sendCapi({ ...ctx(req, p), name: 'Lead', email, phone: rec.phone, custom: { content_name: 'listing_health_report' } });   // Meta Lead, dedupliziert mit dem Pixel über sid:Lead
+    if (p.px === 1) sendCapi({ ...ctx(req, p), name: 'Lead', email: rec.email, phone: rec.phone, custom: { content_name: 'listing_health_report' } });   // Meta Lead, dedupliziert mit dem Pixel über sid:Lead
     json(res, 200, { ok: true, token: rec.token });
-    deliver(rec, base(req)).catch((e) => console.error('LEAD-LIEFERUNG', e.message));
+    afterLead(rec, base(req)).catch((e) => console.error('LEAD-LIEFERUNG', e.message));
   }
 
   const parse = (name) => { const m = String(name).match(/^([a-f0-9]{10})\.([a-f0-9]{16})/); return m && sign(m[1]) === m[2] ? m[1] : null; };
@@ -98,7 +111,7 @@ export function createLeads(c) {
   function stats(req, res, u) {
     if (!authed(req)) return json(res, 401, { ok: false, error: 'Nicht erlaubt' });
     const days = Math.min(365, Math.max(1, Number(u.searchParams.get('days')) || 30)), since = Date.now() - days * 864e5, E = lines('events.jsonl').filter((x) => Date.parse(x.t) >= since), L = lines('leads.jsonl').filter((x) => Date.parse(x.receivedAt) >= since);
-    const names = ['scan_start', 'scan_done', 'scan_error', 'gate_view', 'gate_locked_click', 'gate_submit', 'lead_saved', 'unlocked', 'pdf_ready', 'pdf_failed', 'mail_sent', 'mail_failed', 'mail_skipped', 'pdf_open', 'go_click', 'page_cta_click', 'print_blocked'];
+    const names = ['scan_start', 'scan_done', 'scan_error', 'gate_view', 'gate_locked_click', 'gate_submit', 'lead_saved', 'lead_enriched', 'wa_pending', 'unlocked', 'pdf_ready', 'pdf_failed', 'mail_sent', 'mail_failed', 'mail_skipped', 'pdf_open', 'go_click', 'page_cta_click', 'print_blocked'];
     const funnel = {}; for (const n of names) { const s = E.filter((x) => x.e === n); funnel[n] = { n: s.length, u: new Set(s.map((x) => x.sid || x.id || x.t)).size }; }
     const r = (a, b) => (funnel[b] && funnel[b].u ? Math.round((funnel[a].u / funnel[b].u) * 1000) / 10 : null);
     const zones = {}; E.filter((x) => x.e === 'gate_locked_click').forEach((x) => { zones[x.zone || '?'] = (zones[x.zone || '?'] || 0) + 1; });
