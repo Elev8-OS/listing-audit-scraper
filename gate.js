@@ -57,6 +57,20 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
 `;
   document.head.appendChild(css);
 
+  /* Teaser-Modus: vor der E-Mail nur Score, Noten der fünf Bereiche und ein Hinweis, was im Report steckt. Alles andere erst danach. */
+  const css2 = document.createElement('style'); css2.id = 'teaserCss';
+  css2.textContent = `
+html.scanned .hero-art{display:none!important}
+html.gated #plan,html.gated #studio,html.gated #fotos,html.gated #luecke,html.gated #markt,html.gated #wettbewerb{display:none!important}
+html.gated #befunde>header .sub{display:none}
+html.gated #tiles .tile{cursor:pointer}
+html.gated #tiles .tile p{color:transparent!important;user-select:none;-webkit-user-select:none;height:42px;overflow:hidden;border-radius:6px;background:linear-gradient(#E6E6E1,#E6E6E1) 0 5px/94% 9px no-repeat,linear-gradient(#E6E6E1,#E6E6E1) 0 23px/62% 9px no-repeat}
+html.gated #tiles .tile .more{font-size:0}
+html.gated #tiles .tile .more svg{display:none}
+html.gated #tiles .tile .more::after{content:attr(data-lk);font-size:.88rem;font-weight:700;color:var(--ink,#0A0A0A);text-decoration:underline;text-decoration-color:var(--y,#F6BB12);text-decoration-thickness:3px;text-underline-offset:3px}
+`;
+  document.head.appendChild(css2);
+
   const zones = { '#planList': 'plan', '#compView': 'markt', '#market': 'markt', '#gapList': 'luecke', '#liveFoto': 'fotos', '#descView': 'text' };
   const labels = () => L('Mit E-Mail freischalten', 'Unlock with your email');
 
@@ -70,11 +84,11 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
     if (g.classList.contains('done')) { if (!gated()) return; g.classList.remove('done'); g.innerHTML = ''; delete g.dataset.lang; }   // neues Inserat: Gate wieder aufbauen
     if (g.dataset.lang === state.lang && g.querySelector('#gateForm')) return;   // nicht neu aufbauen: sonst gehen Eingaben verloren
     g.dataset.lang = state.lang;
-    const pot = G.mk && G.mk.potential, cur = G.mk && G.mk.currency || 'CHF', n = (D.actions || []).length;
+    const pot = G.mk && G.mk.potential, cur = G.mk && G.mk.currency || 'CHF', n = (D.actions || []).length, hi = (D.actions || []).filter((a) => /^(hoch|high)$/i.test(String(a.impact || ''))).length, ph = (D.photos || []).length;
     g.innerHTML = `<div><h2>${L('Dein Plan ist fertig. Wohin sollen wir ihn schicken?', 'Your plan is ready. Where should we send it?')}</h2>
       ${pot ? `<p class="money">${L('Dein Inserat lässt geschätzt', 'Your listing leaves an estimated')} ${cur} <i>${String(pot).replace(/\d/g, '8').replace(/\B(?=(\d{3})+(?!\d))/g, '’')}</i> ${L('pro Jahr liegen.', 'a year on the table.')}</p>` : ''}
       <p>${L('Du siehst oben, was auffällt. Im Report steht, was du dagegen tust:', 'Above you see what stands out. The report shows what to do about it:')}</p>
-      <ul><li>${L(`Alle ${n} Maßnahmen mit fertigen Texten`, `All ${n} actions with ready-made copy`)}</li><li>${L('Neuer Titel und neue Beschreibung', 'New title and description')}</li><li>${L('Foto-Reihenfolge und Ersetzen-Liste', 'Photo order and replace list')}</li><li>${L('Marktvergleich mit den drei Besten im Umkreis', 'Market comparison with the three best nearby')}</li><li>${L('Ein Klick an alle Kanäle: mit der Elev8 Suite', 'One click to all channels: with Elev8 Suite')}</li><li>${L('Alles als PDF per E-Mail', 'All of it as a PDF by email')}</li></ul></div>
+      <ul><li>${L(`${n} Maßnahmen${hi ? `, ${hi} mit hoher Wirkung,` : ''} mit fertigen Texten`, `${n} actions${hi ? `, ${hi} with high impact,` : ''} with ready-made copy`)}</li><li>${L('Alle Befunde mit Begründung und Lösung', 'Every finding with the reason and the fix')}</li><li>${L('Neuer Titel und neue Beschreibung, fertig zum Kopieren', 'New title and description, ready to copy')}</li><li>${ph ? L(`Foto-Reihenfolge für ${ph} Fotos und Ersetzen-Liste`, `Photo order for ${ph} photos and replace list`) : L('Foto-Reihenfolge und Ersetzen-Liste', 'Photo order and replace list')}</li><li>${L('Marktvergleich mit den drei Besten im Umkreis', 'Market comparison with the three best nearby')}</li><li>${L('Ein Klick an alle Kanäle: mit der Elev8 Suite', 'One click to all channels: with Elev8 Suite')}</li><li>${L('Alles als PDF per E-Mail', 'All of it as a PDF by email')}</li></ul></div>
       <form id="gateForm" novalidate><input id="gMail" type="email" autocomplete="email" inputmode="email" placeholder="${L('Deine E-Mail-Adresse', 'Your email address')}" aria-label="${L('E-Mail-Adresse', 'Email address')}"><label class="gcons"><input id="gConsent" type="checkbox"><span>${L('Ich möchte den Report per E-Mail erhalten und bin einverstanden, dass Elev8 mich dazu kontaktiert.', 'I want to receive the report by email and agree that Elev8 contacts me about it.')}</span></label><button class="btn primary" type="submit" id="gBtn">${L('Report freischalten', 'Unlock report')}</button><div class="err" id="gErr" role="alert"></div></form>`;
     try { const m = sessionStorage.getItem('lh_mail'); if (m) document.getElementById('gMail').value = m; } catch (x) { }
     if (!G.viewed) { G.viewed = true; ev('gate_view', { score: Math.round(overall()) }); }
@@ -114,7 +128,8 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
   }
   document.addEventListener('click', (e) => { if (e.target.closest && e.target.closest('#mbGate')) toGate('leiste'); });
   function applyGate() {
-    const on = gated(); document.documentElement.classList.toggle('gated', on);
+    const on = gated(); document.documentElement.classList.toggle('gated', on); document.documentElement.classList.toggle('scanned', !!state.reportLive);
+    document.querySelectorAll('#tiles .tile .more').forEach((m) => { if (on) m.setAttribute('data-lk', labels()); else m.removeAttribute('data-lk'); });
     for (const s of Object.keys(zones)) { const e = document.querySelector(s); if (e) { if (on) e.setAttribute('data-lk', labels()); else e.removeAttribute('data-lk'); } }
     const dv = document.getElementById('descView'); if (dv) { if (on && state.descSel === 'after') dv.setAttribute('data-after', '1'); else dv.removeAttribute('data-after'); }
     lockCards(); otaPanel(); e8Labels(); mobileBar(); if (on) renderGate();
@@ -127,7 +142,7 @@ html.gated #titleTabs button.lk::after,html.gated #descTabs button.lk::after{con
     if (!gated()) return; const t = e.target; if (!t.closest) return;
     if (t.closest('#gate')) return;
     if (t.closest('[data-open^="apply"],[data-open="src:elev8"]')) return;   // der OTA-Versand mit Elev8 Suite ist immer erreichbar
-    const locked = t.closest('#planLock') ? 'plan' : t.closest('#planList .act,#planList [data-tog],#planList [data-open],#planList [data-copy]') ? 'plan' : t.closest('#dlPlan,#dlPlan2') ? 'plan' : t.closest('#titleTabs button.lk') ? 'titel' : t.closest('#descTabs button[data-desc="after"]') ? 'text' : t.closest('[data-open^="apply"],[data-copytitle],[data-copydesc],[data-applygo],[data-applysuggest]') ? 'ota' : t.closest('#compView,#market .kpis,#market .ladder,#market table') ? 'markt' : t.closest('#gapList') ? 'luecke' : t.closest('#liveFoto') ? 'fotos' : null;
+    const locked = t.closest('#tiles .tile') ? 'befund' : t.closest('#planLock') ? 'plan' : t.closest('#planList .act,#planList [data-tog],#planList [data-open],#planList [data-copy]') ? 'plan' : t.closest('#dlPlan,#dlPlan2') ? 'plan' : t.closest('#titleTabs button.lk') ? 'titel' : t.closest('#descTabs button[data-desc="after"]') ? 'text' : t.closest('[data-open^="apply"],[data-copytitle],[data-copydesc],[data-applygo],[data-applysuggest]') ? 'ota' : t.closest('#compView,#market .kpis,#market .ladder,#market table') ? 'markt' : t.closest('#gapList') ? 'luecke' : t.closest('#liveFoto') ? 'fotos' : null;
     if (!locked) return; e.preventDefault(); e.stopPropagation(); toGate(locked);
   }, true);
   document.addEventListener('click', (e) => { if (e.target.closest && e.target.closest('[data-book]')) ev('page_cta_click'); });
